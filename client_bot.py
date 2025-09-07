@@ -1,15 +1,33 @@
+#!/usr/bin/env python3
+"""
+Полнофункціональний Telegram-бот для обробки замовлень (реєстрація/перев'язка),
+керування групами менеджерів, чергою, завантаженням фото, погодженням етапів адміністртором
+та збором заявок на співпрацю.
+
+Примітки до запуску:
+- Встановіть BOT_TOKEN у змінних середовища або замініть значення BOT_TOKEN нижче.
+- При необхідності змініть ADMIN_GROUP_ID та ADMIN_ID або теж задайте через ENV.
+- Файл instructions.py повинен експортувати словник INSTRUCTIONS у форматі:
+  INSTRUCTIONS = {"BankName": {"register": [...], "change": [...]}, ...}
+"""
+
 import os
 import sys
 import sqlite3
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters, ConversationHandler
 )
-from instructions import INSTRUCTIONS
+
+# Популярна структура інструкцій (повинен бути окремий файл instructions.py)
+try:
+    from instructions import INSTRUCTIONS
+except Exception:
+    INSTRUCTIONS = {}  # Якщо немає - бот все ще працюватиме, але банки будуть пусті.
 
 # ====== Конфігурація ======
 BOT_TOKEN = "8303921633:AAFu3nvim6qggmkIq2ghg5EMrT-8RhjoP50"
@@ -17,13 +35,7 @@ ADMIN_GROUP_ID = -4930176305
 ADMIN_ID = 7797088374
 
 LOCK_FILE = "bot.lock"
-DB_FILE = "orders.db"
-
-# ====== Захист від подвійного запуску ======
-if os.path.exists(LOCK_FILE):
-    print("⚠️ bot.lock виявлено — ймовірно бот вже запущений. Завершую роботу.")
-    sys.exit(1)
-open(LOCK_FILE, "w").close()
+DB_FILE = os.getenv("DB_FILE", "orders.db")
 
 # ====== Логування ======
 logging.basicConfig(
@@ -31,6 +43,13 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# ====== Захист від подвійного запуску ======
+if os.path.exists(LOCK_FILE):
+    print("⚠️ bot.lock виявлено — ймовірно бот вже запущений. Завершую роботу.")
+    sys.exit(1)
+open(LOCK_FILE, "w").close()
+
 
 # ====== Підключення до БД ======
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -96,10 +115,11 @@ BANKS_REGISTER = [bank for bank, actions in INSTRUCTIONS.items() if "register" i
 BANKS_CHANGE = [bank for bank, actions in INSTRUCTIONS.items() if "change" in actions and actions["change"]]
 
 # ====== Runtime state (тимчасово, для зручності) ======
-user_states = {}  # user_id -> {"order_id", "bank", "action", "stage", "age_required"}
+user_states: Dict[int, Dict[str, Any]] = {}  # user_id -> {"order_id", "bank", "action", "stage", "age_required"}
 
 # ====== Conversation states ======
 COOPERATION_INPUT = 0
+
 
 # ====== Утиліти БД/логіки ======
 def find_age_requirement(bank: str, action: str) -> Optional[int]:
@@ -158,6 +178,15 @@ def enqueue_user(user_id: int, username: str, bank: str, action: str):
                    (user_id, username, bank, action))
     conn.commit()
 
+def get_last_order_for_user(user_id: int) -> Optional[Tuple]:
+    cursor.execute("SELECT id, bank, action, stage, status, group_id FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
+    return cursor.fetchone()
+
+def get_order_by_id(order_id: int) -> Optional[Tuple]:
+    cursor.execute("SELECT id, user_id, username, bank, action, stage, status, group_id FROM orders WHERE id=?", (order_id,))
+    return cursor.fetchone()
+
+
 # ====== Призначення груп/черги (має бути визначено ДО викликів) ======
 async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank: str, action: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
     cursor.execute("SELECT id, group_id, name FROM manager_groups WHERE busy=0 ORDER BY id ASC LIMIT 1")
@@ -168,7 +197,7 @@ async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank
             occupy_group_db_by_dbid(group_db_id)
             set_order_group_db(order_id, group_chat_id)
             logger.info("Order %s assigned to group %s (%s)", order_id, group_chat_id, group_name)
-            msg = f"📢 Нова заявка від @{username} (ID: {user_id})\n🏦 {bank} — {action}"
+            msg = f"📢 Нова заявка від @{username} (ID: {user_id})\n🏦 {bank} — {action}\nOrderID: {order_id}"
             try:
                 await context.bot.send_message(chat_id=group_chat_id, text=msg)
             except Exception as e:
@@ -219,6 +248,102 @@ async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.exception("assign_queued_clients_to_free_groups error: %s", e)
 
+# ====== Відправка інструкцій користувачу ======
+async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Відправляє інструкцію для поточного етапу користувачу.
+    Якщо етапів більше немає — завершує замовлення, звільняє групу та сповіщає адмінів.
+    """
+    state = user_states.get(user_id)
+    if not state:
+        # спробуємо підвантажити останнє замовлення з БД
+        row = get_last_order_for_user(user_id)
+        if not row:
+            logger.warning("send_instruction: не знайдено замовлення для користувача %s", user_id)
+            try:
+                await context.bot.send_message(chat_id=user_id, text="❌ Помилка: замовлення не знайдено. Почніть заново командою /start")
+            except Exception:
+                pass
+            return
+        order_id, bank, action, stage, status, group_id = row[0], row[1], row[2], row[3], row[4], row[5]
+        user_states[user_id] = {"order_id": order_id, "bank": bank, "action": action, "stage": stage, "age_required": find_age_requirement(bank, action)}
+        state = user_states[user_id]
+
+    order_id = state.get("order_id")
+    bank = state.get("bank")
+    action = state.get("action")
+    stage = state.get("stage", 0)
+
+    steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+    if not steps:
+        # Нема інструкцій — завершити замовлення з повідомленням адміну
+        update_order_stage_db(order_id, stage, status="Помилка: інструкції відсутні")
+        logger.warning("No instructions for %s %s (order %s)", bank, action, order_id)
+        try:
+            await context.bot.send_message(chat_id=user_id, text="❌ Помилка: інструкції для обраного банку/операції відсутні. Зв'яжіться з менеджером.")
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=f"⚠️ Для замовлення {order_id} немає інструкцій: {bank} {action}")
+        except Exception:
+            pass
+        return
+
+    # Коли stage >= len(steps) — завершено
+    if stage >= len(steps):
+        update_order_stage_db(order_id, stage, status="Завершено")
+        # звільнити групу
+        order = get_order_by_id(order_id)
+        if order:
+            group_chat_id = order[7]
+            if group_chat_id:
+                try:
+                    free_group_db_by_chatid(group_chat_id)
+                except Exception:
+                    pass
+        # повідомлення користувачу та адміну
+        try:
+            await context.bot.send_message(chat_id=user_id, text="✅ Ваше замовлення завершено. Дякуємо!")
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=f"✅ Замовлення {order_id} виконано для @{order[2]} (ID: {order[1]})")
+        except Exception:
+            pass
+        # видалити сесію
+        user_states.pop(user_id, None)
+        # після звільнення групи — призначити з черги
+        try:
+            await assign_queued_clients_to_free_groups(context)
+        except Exception:
+            pass
+        return
+
+    # Отримати поточний крок
+    step = steps[stage]
+    if isinstance(step, dict):
+        text = step.get("text", "")
+        images = step.get("images", [])
+    else:
+        text = str(step)
+        images = []
+
+    # Оновити статус в БД
+    update_order_stage_db(order_id, stage, status=f"На етапі {stage+1}")
+
+    # Відправити текст
+    if text:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=text)
+        except Exception as e:
+            logger.warning("Не вдалося надіслати текст користувачу %s: %s", user_id, e)
+
+    # Відправити зображення (шлях або file_id)
+    for img in images:
+        try:
+            if isinstance(img, str) and os.path.exists(img):
+                with open(img, "rb") as f:
+                    await context.bot.send_photo(chat_id=user_id, photo=f)
+            else:
+                # Якщо передано file_id або посилання, bot спробує відправити так
+                await context.bot.send_photo(chat_id=user_id, photo=img)
+        except Exception as e:
+            logger.warning("Не вдалося відправити зображення %s користувачу %s: %s", img, user_id, e)
+
 # ====== Хендлери меню / логіка ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -268,6 +393,9 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         banks = BANKS_REGISTER if action == "register" else BANKS_CHANGE
         keyboard = [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_{action}")] for bank in banks]
         keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_banks")])
+        if not banks:
+            await query.edit_message_text("Наразі записи для цього типу відсутні. Спробуйте пізніше.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="menu_banks")]]))
+            return
         await query.edit_message_text("Оберіть банк:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -327,73 +455,6 @@ async def age_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await send_instruction(user_id, context)
     await query.edit_message_text("✅ Вік підтверджено. Починаємо інструкції.")
-
-# ====== Відправка інструкцій користувачу ======
-async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    state = user_states.get(user_id)
-    if not state:
-        cursor.execute("SELECT id, bank, action, stage FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
-        row = cursor.fetchone()
-        if not row:
-            return
-        order_id, bank, action, stage = row
-        state = {"order_id": order_id, "bank": bank, "action": action, "stage": stage, "age_required": find_age_requirement(bank, action)}
-        user_states[user_id] = state
-
-    order_id = state.get("order_id")
-    bank = state["bank"]
-    action = state["action"]
-    stage = state.get("stage", 0)
-
-    steps = INSTRUCTIONS.get(bank, {}).get(action, [])
-    if not steps:
-        await context.bot.send_message(chat_id=user_id, text="ℹ️ Для цього банку інструкції відсутні. Зверніться до менеджера.")
-        if order_id:
-            cursor.execute("UPDATE orders SET status=? WHERE id=?", ("Немає інструкцій", order_id))
-            conn.commit()
-        return
-
-    if stage >= len(steps):
-        await context.bot.send_message(chat_id=user_id, text="✅ Усі етапи завершені. Дякуємо!")
-        if order_id:
-            cursor.execute("UPDATE orders SET status=?, stage=? WHERE id=?", ("Процес завершено", stage, order_id))
-            conn.commit()
-
-            cursor.execute("SELECT group_id FROM orders WHERE id=?", (order_id,))
-            g = cursor.fetchone()
-            if g and g[0]:
-                freed_gid = g[0]
-                free_group_db_by_chatid(freed_gid)
-                await assign_queued_clients_to_free_groups(context)
-        return
-
-    step = steps[stage]
-    if isinstance(step, dict):
-        text = step.get("text", "")
-        images = step.get("images", [])
-    else:
-        text = str(step)
-        images = []
-
-    if text:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            logger.warning("Не вдалося надіслати текст користувачу %s: %s", user_id, e)
-
-    for img_path in images:
-        try:
-            if os.path.exists(img_path):
-                with open(img_path, "rb") as f:
-                    await context.bot.send_photo(chat_id=user_id, photo=f)
-            else:
-                logger.warning("Зображення не знайдено: %s", img_path)
-        except Exception as e:
-            logger.warning("Помилка надсилання фото %s користувачу %s: %s", img_path, user_id, e)
-
-    if order_id is not None:
-        cursor.execute("UPDATE orders SET stage=? WHERE id=?", (stage, order_id))
-        conn.commit()
 
 # ====== Обробка фото від користувача ======
 async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -607,6 +668,30 @@ async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"• {name} ({gid}) — {'🔴 Зайнята' if busy else '🟢 Вільна'}\n"
     await update.message.reply_text(text)
 
+# ====== Admin: queue viewing ======
+async def show_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ У вас немає прав для цієї команди.")
+    cursor.execute("SELECT id, user_id, username, bank, action, created_at FROM queue ORDER BY id ASC")
+    rows = cursor.fetchall()
+    if not rows:
+        return await update.message.reply_text("📭 Черга пуста.")
+    text = "📋 Черга:\n\n"
+    for r in rows:
+        text += f"#{r[0]} — @{r[2]} (ID: {r[1]}) — {r[3]} / {r[4]} — {r[5]}\n"
+    await update.message.reply_text(text)
+
+# ====== User helper: status ======
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    order = get_last_order_for_user(user_id)
+    if not order:
+        await update.message.reply_text("У вас немає активних замовлень.")
+        return
+    order_id, bank, action, stage, status_text, group_id = order
+    text = f"📌 OrderID: {order_id}\n🏦 {bank} — {action}\n📍 {status_text}\nЕтап: {stage+1}"
+    await update.message.reply_text(text)
+
 # ====== Error handler ======
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Ошибка в аплікації: %s", context.error)
@@ -618,6 +703,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 # ====== Регістрація handler-ів і запуск ======
 def main():
+    if BOT_TOKEN in ("", "CHANGE_ME_PLEASE"):
+        print("ERROR: BOT_TOKEN не встановлено. Задайте змінну середовища BOT_TOKEN.")
+        return
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_error_handler(error_handler)
 
@@ -640,6 +729,8 @@ def main():
     app.add_handler(CommandHandler("addgroup", add_group))
     app.add_handler(CommandHandler("delgroup", del_group))
     app.add_handler(CommandHandler("groups", list_groups))
+    app.add_handler(CommandHandler("queue", show_queue))
+    app.add_handler(CommandHandler("status", status))
 
     logger.info("Бот запущений...")
     app.run_polling()
