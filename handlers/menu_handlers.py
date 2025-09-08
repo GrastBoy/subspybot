@@ -35,7 +35,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu_info":
         info_text = (
             "💳 Оплата здійснюється на карту XXXX XXXX XXXX XXXX\n"
-            "Після оплати обов’язково відправте квитанцію в чат.\n\n"
+            "Після оплати обов'язково відправте квитанцію в чат.\n\n"
             "Якщо маєте питання, звертайтесь до менеджера."
         )
         await query.edit_message_text(info_text, reply_markup=InlineKeyboardMarkup(
@@ -106,10 +106,12 @@ async def age_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     order_id = create_order_in_db(user_id, username, bank, action)
     user_states[user_id].update({"order_id": order_id, "stage": 0})
 
+    # ВИПРАВЛЕНО: правильна обробка результату assign_group_or_queue
     assigned = await assign_group_or_queue(order_id, user_id, username, bank, action, context)
-    if not assigned:
-        await query.edit_message_text("⏳ Усі менеджери зайняті. Ви поставлені в чергу. Отримаєте повідомлення коли звільниться менеджер.")
-        return
-
-    await send_instruction(user_id, context)
-    await query.edit_message_text("✅ Вік підтверджено. Починаємо інструкції.")
+    if assigned:
+        # Менеджер призначений, надсилаємо інструкції
+        await send_instruction(user_id, context)
+        await query.edit_message_text("✅ Вік підтверджено. Менеджер призначений. Починаємо інструкції.")
+    else:
+        # Користувач поставлений в чергу (повідомлення вже надіслано в assign_group_or_queue)
+        await query.edit_message_text("✅ Вік підтверджено. Ви поставлені в чергу.")
