@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS order_photos (
     order_id INTEGER,
     stage INTEGER,
     file_id TEXT,
-    confirmed INTEGER DEFAULT 0
+    confirmed INTEGER DEFAULT 0,
+    reason TEXT
 )
 """)
 

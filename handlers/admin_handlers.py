@@ -221,11 +221,10 @@ async def finish_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+        # Завершуємо всі незавершені замовлення
         cursor.execute("SELECT id, user_id FROM orders WHERE status!='Завершено'")
         rows = cursor.fetchall()
-        if not rows:
-            await update.message.reply_text("✅ Немає незавершених замовлень.")
-            return
+        finished_count = 0
         for order_id, client_user_id in rows:
             cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
             user_states.pop(client_user_id, None)
@@ -233,9 +232,15 @@ async def finish_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=client_user_id, text="🏁 Ваше замовлення було завершено адміністратором.")
             except Exception:
                 pass
+            finished_count += 1
+
+        # Очищаємо чергу
+        cursor.execute("DELETE FROM queue")
         conn.commit()
-        await update.message.reply_text(f"✅ Завершено всі незавершені замовлення: {len(rows)} шт.")
-        logger.info(f"Всі незавершені замовлення завершено ({len(rows)} шт).")
+
+        await update.message.reply_text(f"✅ Завершено всі незавершені замовлення: {finished_count} шт. Чергу очищено.")
+        logger.info(f"Всі незавершені замовлення завершено ({finished_count} шт). Черга очищена.")
+
     except Exception as e:
         logger.exception("finish_all_orders error: %s", e)
         await update.message.reply_text("⚠️ Сталася помилка під час завершення всіх замовлень.")
