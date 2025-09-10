@@ -6,10 +6,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from db import cursor, conn, ADMIN_GROUP_ID, logger
-from states import user_states, find_age_requirement
-
-# States for ConversationHandler
-REJECT_REASON, MANAGER_MESSAGE = range(2)
+from states import user_states, find_age_requirement, REJECT_REASON, MANAGER_MESSAGE, get_required_photos
+from states import INSTRUCTIONS  # для доступу до всієї структури в разі потреби
 
 # Debounce/aggregation for photo albums and series
 DEBOUNCE_SECONDS = 1.8
@@ -17,6 +15,14 @@ DEBOUNCE_SECONDS = 1.8
 pending_albums: dict[Tuple[int, int, int, int], List[Tuple[str, str]]] = {}
 # album_key -> asyncio.Task
 pending_timers: dict[Tuple[int, int, int, int], asyncio.Task] = {}
+
+# Шаблони причин відхилення
+REJECT_TEMPLATES = {
+    "blurry": "Зображення розмите/нечитабельне",
+    "wrong_screen": "Надіслано неправильний екран/не той крок",
+    "no_name": "Відсутні ПІБ/ключові поля",
+    "crop": "Скрін обрізаний — частина інформації відсутня",
+}
 
 
 # ============= Core handlers (photos review flow) =============
@@ -111,21 +117,41 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
     inserted: List[Tuple[str, int]] = []  # (file_id, photo_db_id)
 
     for file_id, file_unique_id in photos:
-        # Deduplicate by unique id within this order+stage (regardless of active)
+        # Перевірка на існування такого ж файлу (по file_unique_id) на цьому етапі
         cursor.execute(
-            "SELECT COUNT(*) FROM order_photos WHERE order_id=? AND stage=? AND file_unique_id=?",
+            "SELECT id, confirmed, active FROM order_photos "
+            "WHERE order_id=? AND stage=? AND file_unique_id=? "
+            "ORDER BY id DESC LIMIT 1",
             (order_id, stage_db, file_unique_id),
         )
-        exists = cursor.fetchone()[0] > 0
-        if exists:
-            # Skip exact duplicates to avoid spam
+        existing = cursor.fetchone()
+
+        if existing:
+            ex_id, ex_conf, ex_active = existing
+            # Якщо саме цей файл вже було відхилено — реактивуємо як новий перегляд
+            if ex_conf == -1:
+                cursor.execute(
+                    "UPDATE order_photos SET active=1, confirmed=0, reason=NULL, file_id=? WHERE id=?",
+                    (file_id, ex_id),
+                )
+                inserted.append((file_id, ex_id))
+                continue
+            # Якщо дубль активного очікуваного/підтвердженого — пропускаємо
+            if ex_active == 1 and ex_conf in (0, 1):
+                continue
+            # Інакше теж реактивуємо
+            cursor.execute(
+                "UPDATE order_photos SET active=1, confirmed=0, reason=NULL, file_id=? WHERE id=?",
+                (file_id, ex_id),
+            )
+            inserted.append((file_id, ex_id))
             continue
 
+        # Звичайна вставка
         replace_of: Optional[int] = None
         if rejected_ids:
-            # Consume one rejected item as "to be replaced"
+            # Перший у списку відхилених буде "замінений" цим фото
             replace_of = rejected_ids.pop(0)
-            # Deactivate that rejected record so it doesn't block stage completion anymore
             cursor.execute("UPDATE order_photos SET active=0 WHERE id=?", (replace_of,))
 
         cursor.execute(
@@ -137,7 +163,6 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
         inserted.append((file_id, photo_db_id))
 
     if not inserted:
-        # Nothing new to send
         conn.commit()
         return
 
@@ -152,19 +177,30 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
 
     conn.commit()
 
-    # Send each newly inserted photo to admin group with approve/reject
+    # Клавіатура модерації з шаблонами, skip/finish/msg
+    def moderation_keyboard(u_id: int, p_id: int, stage: int):
+        tmpl_row = [
+            InlineKeyboardButton("🔍 Розмито", callback_data=f"rejtmpl_{u_id}_{p_id}_blurry"),
+            InlineKeyboardButton("🧭 Не той екран", callback_data=f"rejtmpl_{u_id}_{p_id}_wrong_screen"),
+        ]
+        tmpl_row2 = [
+            InlineKeyboardButton("🪪 Немає ПІБ", callback_data=f"rejtmpl_{u_id}_{p_id}_no_name"),
+            InlineKeyboardButton("✂️ Обрізано", callback_data=f"rejtmpl_{u_id}_{p_id}_crop"),
+        ]
+        action_row = [
+            InlineKeyboardButton("✅ Підтвердити", callback_data=f"approve_{u_id}_{p_id}"),
+            InlineKeyboardButton("❌ Інше (ввести)", callback_data=f"reject_{u_id}_{p_id}"),
+        ]
+        stage_row = [
+            InlineKeyboardButton("↪️ Skip етап", callback_data=f"skip_{u_id}_{stage}"),
+            InlineKeyboardButton("🏁 Finish замовлення", callback_data=f"finish_{u_id}"),
+            InlineKeyboardButton("💬 Msg користувачу", callback_data=f"msg_{u_id}"),
+        ]
+        return InlineKeyboardMarkup([action_row, tmpl_row, tmpl_row2, stage_row])
+
+    # Надсилаємо кожне фото з кнопками
     total_photos = len(inserted)
     for idx, (file_id, photo_db_id) in enumerate(inserted, start=1):
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Підтвердити", callback_data=f"approve_{user_id}_{photo_db_id}"),
-             InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_{user_id}_{photo_db_id}")],
-            # Optionally extend with more actions:
-            # [InlineKeyboardButton("↪️ Пропустити етап", callback_data=f"skip_{user_id}_{stage_db}")],
-            # [InlineKeyboardButton("🏁 Завершити замовлення", callback_data=f"finish_{user_id}")],
-            # [InlineKeyboardButton("💬 Написати повідомлення", callback_data=f"msg_{user_id}")]
-        ])
-
-        # Fetch fresh state in case it changed
         st = user_states.get(user_id, {})
         bank = st.get("bank", "—")
         action = st.get("action", "—")
@@ -183,7 +219,7 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
                 photo=file_id,
                 caption=caption,
                 parse_mode="HTML",
-                reply_markup=keyboard,
+                reply_markup=moderation_keyboard(user_id, photo_db_id, stage_db),
             )
         except Exception as e:
             logger.warning("Не вдалося переслати фото в адмін-групу: %s", e)
@@ -194,21 +230,50 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     Inline buttons in the admin group:
     - approve_{user_id}_{photo_db_id}
     - reject_{user_id}_{photo_db_id}
+    - rejtmpl_{user_id}_{photo_db_id}_{key}
+    - skip_{user_id}_{stage_db}
+    - finish_{user_id}
+    - msg_{user_id}
     """
     query = update.callback_query
     await query.answer()
     raw = query.data
 
     try:
-        action, str_user_id, str_photo_db_id = raw.split("_")
-        user_id = int(str_user_id)
-        photo_db_id = int(str_photo_db_id)
+        parts = raw.split("_")
+        action = parts[0]
     except Exception:
         try:
             await query.edit_message_caption(caption="⚠️ Некоректні дані.")
         except Exception:
             pass
-        return
+        return ConversationHandler.END
+
+    # Розбір параметрів по діях
+    try:
+        if action in ("approve", "reject"):
+            _, str_user_id, str_photo_db_id = parts
+            user_id = int(str_user_id)
+            photo_db_id = int(str_photo_db_id)
+        elif action == "rejtmpl":
+            _, str_user_id, str_photo_db_id, key = parts
+            user_id = int(str_user_id)
+            photo_db_id = int(str_photo_db_id)
+        elif action == "skip":
+            _, str_user_id, str_stage = parts
+            user_id = int(str_user_id)
+            stage_db = int(str_stage)
+        elif action in ("finish", "msg"):
+            _, str_user_id = parts
+            user_id = int(str_user_id)
+        else:
+            raise ValueError("Unknown action")
+    except Exception:
+        try:
+            await query.edit_message_caption(caption="⚠️ Формат кнопки невірний.")
+        except Exception:
+            pass
+        return ConversationHandler.END
 
     # Ensure local cache of user's state exists
     state = user_states.get(user_id)
@@ -233,10 +298,10 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await query.edit_message_caption(caption="⚠️ Користувача не знайдено в сесії")
             except Exception:
                 pass
-            return
+            return ConversationHandler.END
 
     order_id = user_states[user_id]["order_id"]
-    stage_db = user_states[user_id]["stage"] + 1  # photos stored with 1-based stage
+    current_stage_db = user_states[user_id]["stage"] + 1  # 1-based для фото
 
     if action == "approve":
         cursor.execute("UPDATE order_photos SET confirmed=1 WHERE id=?", (photo_db_id,))
@@ -245,12 +310,10 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.edit_message_caption(caption="✅ Скрін підтверджено менеджером.")
         except Exception:
             pass
-
-        # Evaluate stage completion after approval
-        await _evaluate_stage_and_notify(user_id, order_id, stage_db, context)
+        await _evaluate_stage_and_notify(user_id, order_id, current_stage_db, context)
         return ConversationHandler.END
 
-    elif action == "reject":
+    if action == "reject":
         context.user_data['reject_user_id'] = user_id
         context.user_data['photo_db_id'] = photo_db_id
         try:
@@ -259,7 +322,62 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             pass
         return REJECT_REASON
 
-    # In case of unknown action
+    if action == "rejtmpl":
+        # Швидке відхилення по шаблону
+        reason = REJECT_TEMPLATES.get(key, "Відхилено (шаблон)")
+        cursor.execute("UPDATE order_photos SET confirmed=-1, reason=? WHERE id=?", (reason, photo_db_id))
+        conn.commit()
+        try:
+            await query.edit_message_caption(caption=f"❌ Відхилено: {reason}")
+        except Exception:
+            pass
+        await _evaluate_stage_and_notify(user_id, order_id, current_stage_db, context)
+        return ConversationHandler.END
+
+    if action == "skip":
+        # Позначаємо всі активні фото етапу як підтверджені
+        cursor.execute(
+            "UPDATE order_photos SET confirmed=1 WHERE order_id=? AND stage=? AND active=1",
+            (order_id, stage_db)
+        )
+        conn.commit()
+        try:
+            await query.edit_message_caption(caption=f"↪️ Етап {stage_db} пропущено менеджером.")
+        except Exception:
+            pass
+        await _evaluate_stage_and_notify(user_id, order_id, stage_db, context)
+        return ConversationHandler.END
+
+    if action == "finish":
+        # Завершення замовлення користувача
+        try:
+            _finish_user_latest_order_and_free_group(user_id)
+            try:
+                await query.edit_message_caption(caption="🏁 Замовлення користувача завершено менеджером.")
+            except Exception:
+                pass
+            # Повідомляємо користувача
+            try:
+                await context.bot.send_message(chat_id=user_id, text="🏁 Ваше замовлення було завершено менеджером.")
+            except Exception:
+                pass
+            # Підхоплюємо з черги
+            try:
+                await assign_queued_clients_to_free_groups(context)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception("finish action error: %s", e)
+        return ConversationHandler.END
+
+    if action == "msg":
+        context.user_data['msg_user_id'] = user_id
+        try:
+            await query.edit_message_caption(caption="💬 Введіть текст повідомлення для користувача в чаті.")
+        except Exception:
+            pass
+        return MANAGER_MESSAGE
+
     return ConversationHandler.END
 
 
@@ -297,7 +415,7 @@ async def reject_reason_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def manager_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Optional: manager can send a freeform message to user (if you add a button for it)."""
+    """Manager sends a freeform message to user after pressing Msg button."""
     user_id = context.user_data.get('msg_user_id')
     if not user_id:
         return ConversationHandler.END
@@ -315,9 +433,10 @@ async def manager_message_handler(update: Update, context: ContextTypes.DEFAULT_
 async def _evaluate_stage_and_notify(user_id: int, order_id: int, stage_db: int, context: ContextTypes.DEFAULT_TYPE):
     """
     Evaluate the current stage for a user:
-    - If any active photo is still pending (confirmed=0), do nothing.
-    - If any active photo is rejected (confirmed=-1), notify the user with reasons and stay on stage.
-    - If all active photos are approved (confirmed=1), move to next stage: update DB, notify, and send next instruction.
+    - If any active photo is still pending (confirmed=0), do nothing unless required_photos reached.
+    - If any active photo is rejected (confirmed=-1), notify the user with reasons (unless threshold is reached).
+    - If required_photos is defined and approved_count >= required_photos -> advance stage.
+    - Else if all active photos are approved -> advance.
     """
     # Consider only active photos for the current stage
     cursor.execute(
@@ -326,44 +445,27 @@ async def _evaluate_stage_and_notify(user_id: int, order_id: int, stage_db: int,
         (order_id, stage_db),
     )
     rows = cursor.fetchall()
-
     if not rows:
         return
 
-    any_pending = any(r[1] == 0 for r in rows)
-    any_rejected = any(r[1] == -1 for r in rows)
+    approved_count = sum(1 for r in rows if r[1] == 1)
+    pending_count = sum(1 for r in rows if r[1] == 0)
+    rejected_rows = [(r[0], r[2]) for r in rows if r[1] == -1]
     all_approved = all(r[1] == 1 for r in rows)
 
-    if any_pending:
-        # Still pending review
-        return
+    # required_photos для цього банку/екшену/етапу (stage0 = stage_db-1)
+    state = user_states.get(user_id, {})
+    bank = state.get("bank")
+    action = state.get("action")
+    required_photos = get_required_photos(bank, action, stage_db - 1) if bank and action is not None else None
 
-    if any_rejected:
-        # Prepare reasons and notify the user
-        cursor.execute(
-            "SELECT id, COALESCE(reason, '') FROM order_photos "
-            "WHERE order_id=? AND stage=? AND active=1 AND confirmed=-1 ORDER BY id ASC",
-            (order_id, stage_db),
-        )
-        rejected = cursor.fetchall()
-        lines = []
-        for i, (pid, reason) in enumerate(rejected, start=1):
-            lines.append(f"{i}. Скрін ID {pid}: {reason or 'без причини'}")
-        text = "❌ Деякі скріни не пройшли перевірку менеджером.\n" \
-               "Потрібно замінити наступні скріни:\n" + "\n".join(lines) + \
-               "\n\nСкиньте заміну скрінів, щоб перейти на наступний етап."
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception:
-            pass
-        return
+    threshold_reached = (required_photos is not None and approved_count >= required_photos)
 
-    if all_approved:
+    if threshold_reached or (pending_count == 0 and all_approved):
         # Advance to next stage
         try:
             user_states[user_id]['stage'] = user_states[user_id].get('stage', 0) + 1
         except Exception:
-            # If state was missing, restore minimal state
             cursor.execute("SELECT stage FROM orders WHERE id=?", (order_id,))
             r = cursor.fetchone()
             new_stage0 = (r[0] if r else 0) + 1
@@ -376,21 +478,38 @@ async def _evaluate_stage_and_notify(user_id: int, order_id: int, stage_db: int,
         except Exception as e:
             logger.warning("Не вдалося оновити стадію замовлення %s: %s", order_id, e)
 
+        # Повідомляємо користувача і шлемо інструкції
         try:
-            await context.bot.send_message(chat_id=user_id, text="✅ Всі ваші скріни підтверджено. Переходимо на наступний етап.")
+            await context.bot.send_message(chat_id=user_id, text="✅ Ваші скріни прийнято. Переходимо на наступний етап.")
             await send_instruction(user_id, context)
         except Exception as e:
             logger.warning("Не вдалося надіслати інструкцію наступного етапу: %s", e)
+        return
 
+    # Якщо не досягнуто порогу і є відхилені — пояснити, що потрібно замінити
+    if rejected_rows and not threshold_reached:
+        lines = []
+        for i, (pid, reason) in enumerate(rejected_rows, start=1):
+            lines.append(f"{i}. Скрін ID {pid}: {reason or 'без причини'}")
+        text = "❌ Деякі скріни не пройшли перевірку менеджером.\n" \
+               "Потрібно замінити наступні скріни:\n" + "\n".join(lines) + \
+               "\n\nСкиньте заміну скрінів, щоб перейти на наступний етап."
+        try:
+            await context.bot.send_message(chat_id=user_id, text=text)
+        except Exception:
+            pass
+        return
 
-# ============= Other existing service functions (kept) =============
+    # Якщо ще є очікувані — нічого не робимо
+    return
+
 
 def create_order_in_db(user_id: int, username: str, bank: str, action: str) -> int:
     cursor.execute(
         "INSERT INTO orders (user_id, username, bank, action, stage, status) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, username, bank, action, 0, "На етапі 1")
     )
-    conn.commit()
+    conn.commit
     return cursor.lastrowid
 
 
@@ -530,7 +649,7 @@ async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYP
 
 
 async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    from states import INSTRUCTIONS
+    # INSTRUCTIONS імпортуємо зі states
     state = user_states.get(user_id)
     if not state:
         row = get_last_order_for_user(user_id)
@@ -568,17 +687,17 @@ async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if stage0 >= len(steps):
         update_order_stage_db(order_id, stage0, status="Завершено")
         order = get_order_by_id(order_id)
-        if order:
-            group_chat_id = order[7]
-            if group_chat_id:
-                try:
-                    free_group_db_by_chatid(group_chat_id)
-                except Exception:
-                    pass
+        group_chat_id = order[7] if order else None
+        if group_chat_id:
+            try:
+                free_group_db_by_chatid(group_chat_id)
+            except Exception:
+                pass
         try:
             await context.bot.send_message(chat_id=user_id, text="✅ Ваше замовлення завершено. Дякуємо!")
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID,
-                                           text=f"✅ Замовлення {order_id} виконано для @{order[2]} (ID: {order[1]})")
+            if order:
+                await context.bot.send_message(chat_id=ADMIN_GROUP_ID,
+                                               text=f"✅ Замовлення {order_id} виконано для @{order[2]} (ID: {order[1]})")
         except Exception:
             pass
         user_states.pop(user_id, None)
@@ -609,3 +728,17 @@ async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_photo(chat_id=user_id, photo=img)
         except Exception as e:
             logger.warning("Не вдалося відправити зображення %s користувачу %s: %s", img, user_id, e)
+
+
+def _finish_user_latest_order_and_free_group(user_id: int):
+    cursor.execute("SELECT id, group_id FROM orders WHERE user_id=? AND status!='Завершено' ORDER BY id DESC LIMIT 1",
+                   (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        return
+    order_id, group_chat_id = row
+    cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
+    if group_chat_id:
+        cursor.execute("UPDATE manager_groups SET busy=0 WHERE group_id=?", (group_chat_id,))
+    conn.commit()
+    user_states.pop(user_id, None)

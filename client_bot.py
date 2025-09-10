@@ -14,6 +14,7 @@ from handlers.admin_handlers import (
     add_admin, remove_admin, list_admins, admin_help
 )
 from handlers.status_handler import status
+from handlers.order_handlers import myorders, order_detail
 from handlers.error_handler import error_handler
 
 def main():
@@ -24,31 +25,47 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_error_handler(error_handler)
 
+    # User menu and flow
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(main_menu_handler, pattern="^(menu_banks|menu_info|back_to_main|type_register|type_change|bank_.*)$"))
     app.add_handler(CallbackQueryHandler(age_confirm_handler, pattern="^age_confirm_.*$"))
-    app.add_handler(CallbackQueryHandler(handle_admin_action, pattern="^(approve|reject|skip|finish|msg)_.*$"))
+
+    # Photos from users
     app.add_handler(MessageHandler(filters.PHOTO, handle_photos))
 
-    conv_handler = ConversationHandler(
+    # Conversation for cooperation requests
+    coop_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(cooperation_start_handler, pattern="menu_coop")],
         states={
             COOPERATION_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, cooperation_receive)],
-            REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, reject_reason_handler)],
-            MANAGER_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manager_message_handler)]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,
         per_message=True
     )
-    app.add_handler(conv_handler)
+    app.add_handler(coop_conv)
 
+    # Conversation for admin moderation (approve/reject + templates + skip/finish/msg flows)
+    admin_moderation_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(handle_admin_action, pattern="^(approve|reject|rejtmpl|skip|finish|msg)_.*$")],
+        states={
+            REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, reject_reason_handler)],
+            MANAGER_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manager_message_handler)],
+        },
+        fallbacks=[],
+        per_chat=True
+    )
+    app.add_handler(admin_moderation_conv)
+
+    # User/Admin commands
     app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("addgroup", add_group))
     app.add_handler(CommandHandler("delgroup", del_group))
     app.add_handler(CommandHandler("groups", list_groups))
     app.add_handler(CommandHandler("queue", show_queue))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("myorders", myorders))
+    app.add_handler(CommandHandler("order", order_detail))
     app.add_handler(CommandHandler("finish_order", finish_order))
     app.add_handler(CommandHandler("finish_all_orders", finish_all_orders))
     app.add_handler(CommandHandler("orders_stats", orders_stats))

@@ -2,7 +2,12 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 from db import cursor, conn, ADMIN_ID, ADMIN_GROUP_ID, logger
-from handlers.photo_handlers import get_last_order_for_user
+from handlers.photo_handlers import (
+    get_last_order_for_user,
+    get_order_by_id,
+    free_group_db_by_chatid,
+    assign_queued_clients_to_free_groups,
+)
 from states import user_states
 
 ADMINS_FILE = "admins.txt"
@@ -10,9 +15,7 @@ ADMINS_FILE = "admins.txt"
 def load_admins():
     """Зчитати список адмінів з файлу"""
     if not os.path.exists(ADMINS_FILE):
-        # Створити файл з поточним адміном, якщо не існує
         with open(ADMINS_FILE, "w") as f:
-            # Додаємо ADMIN_ID як початкового адміна
             f.write(str(ADMIN_ID) + "\n")
     with open(ADMINS_FILE, "r") as f:
         return set(int(line.strip()) for line in f if line.strip().isdigit())
@@ -121,7 +124,6 @@ async def show_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Додати нового адміна: /add_admin <user_id>"""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("⛔ Доступ тільки для адміністратора.")
@@ -147,7 +149,6 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Додано нового адміна: {new_admin_id}")
 
 async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Видалити адміна: /remove_admin <user_id>"""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("⛔ Доступ тільки для адміністратора.")
@@ -173,7 +174,6 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Видалено адміна: {remove_admin_id}")
 
 async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показати список адмінів: /list_admins"""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("⛔ Доступ тільки для адміністратора.")
@@ -195,21 +195,37 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Вкажіть order_id. Приклад: /finish_order 123")
             return
         order_id = int(args[0])
-        cursor.execute("SELECT user_id FROM orders WHERE id=? AND status!='Завершено'", (order_id,))
-        user_row = cursor.fetchone()
-        if not user_row:
+        cursor.execute("SELECT user_id, group_id FROM orders WHERE id=? AND status!='Завершено'", (order_id,))
+        row = cursor.fetchone()
+        if not row:
             await update.message.reply_text("❌ Замовлення не знайдено або вже завершено.")
             return
-        client_user_id = user_row[0]
+        client_user_id, group_chat_id = row[0], row[1]
+
         cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
         conn.commit()
+
+        if group_chat_id:
+            try:
+                free_group_db_by_chatid(group_chat_id)
+            except Exception:
+                pass
+
         user_states.pop(client_user_id, None)
+
         try:
             await context.bot.send_message(chat_id=client_user_id, text="🏁 Ваше замовлення було завершено адміністратором.")
         except Exception:
             pass
+
         await update.message.reply_text(f"✅ Замовлення {order_id} завершено.")
         logger.info(f"Order {order_id} завершено адміністратором.")
+
+        try:
+            await assign_queued_clients_to_free_groups(context)
+        except Exception:
+            pass
+
     except Exception as e:
         logger.exception("finish_order error: %s", e)
         await update.message.reply_text("⚠️ Сталася помилка під час завершення замовлення.")
@@ -221,20 +237,28 @@ async def finish_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Завершуємо всі незавершені замовлення
-        cursor.execute("SELECT id, user_id FROM orders WHERE status!='Завершено'")
+        cursor.execute("SELECT id, user_id, group_id FROM orders WHERE status!='Завершено'")
         rows = cursor.fetchall()
         finished_count = 0
-        for order_id, client_user_id in rows:
+        freed_groups = set()
+
+        for order_id, client_user_id, group_chat_id in rows:
             cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
             user_states.pop(client_user_id, None)
+            if group_chat_id:
+                freed_groups.add(group_chat_id)
             try:
                 await context.bot.send_message(chat_id=client_user_id, text="🏁 Ваше замовлення було завершено адміністратором.")
             except Exception:
                 pass
             finished_count += 1
 
-        # Очищаємо чергу
+        for gid in freed_groups:
+            try:
+                free_group_db_by_chatid(gid)
+            except Exception:
+                pass
+
         cursor.execute("DELETE FROM queue")
         conn.commit()
 
@@ -276,27 +300,16 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "🛡️ <b>Довідка по адмін-командам</b>\n\n"
-        "<b>/history [user_id]</b> — Показати останні 10 замовлень або останнє замовлення конкретного користувача.\n"
-        "<b>/addgroup &lt;group_id&gt; &lt;назва&gt;</b> — Додати нову групу менеджерів.\n"
+        "<b>/history [user_id]</b> — Останні 10 замовлень або останнє замовлення користувача.\n"
+        "<b>/addgroup &lt;group_id&gt; &lt;назва&gt;</b> — Додати групу менеджерів.\n"
         "<b>/delgroup &lt;group_id&gt;</b> — Видалити групу.\n"
-        "<b>/groups</b> — Показати список груп.\n"
-        "<b>/queue</b> — Показати актуальну чергу замовлень.\n"
-        "<b>/status</b> — Перевірити статус замовлення.\n"
-        "<b>/finish_order &lt;order_id&gt;</b> — Позначити конкретне замовлення як завершене.\n"
-        "<b>/finish_all_orders</b> — Завершити всі незавершені замовлення.\n"
-        "<b>/orders_stats</b> — Показати статистику по замовленням.\n"
-        "<b>/add_admin &lt;user_id&gt;</b> — Додати нового адміністратора.\n"
-        "<b>/remove_admin &lt;user_id&gt;</b> — Видалити адміністратора.\n"
-        "<b>/list_admins</b> — Показати список адміністраторів.\n"
-        "<b>/help</b> — Довідка по адмін-командам.\n\n"
-        "ℹ️ <b>Пояснення:</b>\n"
-        "- Всі команди працюють тільки для адміністраторів бота.\n"
-        "- Додавати/видаляти адмінів можна через /add_admin та /remove_admin.\n"
-        "- Групи менеджерів використовуються для розподілу замовлень між співробітниками.\n"
-        "- Команда /history без аргументу показує останні 10 замовлень, з user_id — історію конкретного юзера.\n"
-        "- Для додавання/видалення груп потрібен ідентифікатор групи (число) та назва.\n"
-        "- /finish_order дозволяє вручну закрити замовлення, /finish_all_orders — масово.\n"
-        "- /orders_stats показує загальну статистику замовлень.\n"
-        "- /queue — показує чергу очікування.\n"
+        "<b>/groups</b> — Список груп.\n"
+        "<b>/queue</b> — Черга очікування.\n"
+        "<b>/status</b> — Статус вашого останнього замовлення (для користувача).\n"
+        "<b>/finish_order &lt;order_id&gt;</b> — Закрити замовлення.\n"
+        "<b>/finish_all_orders</b> — Закрити всі незавершені замовлення.\n"
+        "<b>/orders_stats</b> — Статистика замовлень.\n"
+        "<b>/myorders</b> — Список ваших замовлень (для користувача).\n"
+        "<b>/order &lt;order_id&gt;</b> — Картка замовлення (для адміна).\n"
     )
     await update.message.reply_text(text, parse_mode="HTML")

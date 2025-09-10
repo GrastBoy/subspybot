@@ -15,7 +15,9 @@ async def cooperation_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
     cursor.execute("INSERT INTO cooperation_requests (user_id, username, text) VALUES (?, ?, ?)", (user.id, user.username, text))
     conn.commit()
 
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Звʼязатися з клієнтом", url=f"https://t.me/{user.username or user.id}")]])
+    # Коректне посилання, якщо немає username
+    contact_url = f"https://t.me/{user.username}" if user.username else f"tg://user?id={user.id}"
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Звʼязатися з клієнтом", url=contact_url)]])
     msg = f"📩 Нова заявка на співпрацю\n👤 Користувач: @{user.username or 'Без ника'} (ID: {user.id})\n📝 Текст заявки:\n{text}"
     try:
         await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=msg, reply_markup=keyboard)

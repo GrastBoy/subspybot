@@ -106,12 +106,9 @@ async def age_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     order_id = create_order_in_db(user_id, username, bank, action)
     user_states[user_id].update({"order_id": order_id, "stage": 0})
 
-    # ВИПРАВЛЕНО: правильна обробка результату assign_group_or_queue
     assigned = await assign_group_or_queue(order_id, user_id, username, bank, action, context)
     if assigned:
-        # Менеджер призначений, надсилаємо інструкції
         await send_instruction(user_id, context)
         await query.edit_message_text("✅ Вік підтверджено. Менеджер призначений. Починаємо інструкції.")
     else:
-        # Користувач поставлений в чергу (повідомлення вже надіслано в assign_group_or_queue)
         await query.edit_message_text("✅ Вік підтверджено. Ви поставлені в чергу.")

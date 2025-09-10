@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 
 try:
     from instructions import INSTRUCTIONS
@@ -20,4 +20,14 @@ def find_age_requirement(bank: str, action: str) -> Optional[int]:
     for step in steps:
         if isinstance(step, dict) and "age" in step:
             return step["age"]
+    return None
+
+def get_required_photos(bank: str, action: str, stage0: int) -> Optional[int]:
+    """Повертає required_photos для заданого кроку (0-based). Якщо не задано — None."""
+    try:
+        step = INSTRUCTIONS.get(bank, {}).get(action, [])[stage0]
+        if isinstance(step, dict):
+            return step.get("required_photos")
+    except Exception:
+        pass
     return None
