@@ -1,0 +1,16 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Bot runtime files
+bot.lock
+*.db-shm
+*.db-wal
+
+# IDE files
+.DS_Store
+.idea/
+
+# Logs
+*.log
