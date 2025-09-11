@@ -288,6 +288,11 @@ async def handle_registration_text_input(update: Update, context: ContextTypes.D
     
     state = user_states.get(user_id, {})
     
+    # Only process if user is in a registration state
+    if not any(key in state for key in ['awaiting_phone', 'awaiting_email', 'awaiting_sms_code']):
+        # Not in registration flow, don't handle this message
+        return
+    
     try:
         # Check if waiting for phone number
         if 'awaiting_phone' in state:
