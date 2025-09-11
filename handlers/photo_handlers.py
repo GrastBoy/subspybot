@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from db import cursor, conn, ADMIN_GROUP_ID, logger
-from states import user_states, find_age_requirement, REJECT_REASON, MANAGER_MESSAGE, get_required_photos
+from states import user_states, find_age_requirement, REJECT_REASON, get_required_photos
 from states import INSTRUCTIONS  # для доступу до всієї структури в разі потреби
 
 # Debounce/aggregation for photo albums and series
@@ -178,7 +178,7 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
     conn.commit()
 
     # Клавіатура модерації з шаблонами, skip/finish/msg
-    def moderation_keyboard(u_id: int, p_id: int, stage: int):
+    def moderation_keyboard(u_id: int, p_id: int, stage: int, order_id: int):
         tmpl_row = [
             InlineKeyboardButton("🔍 Розмито", callback_data=f"rejtmpl_{u_id}_{p_id}_blurry"),
             InlineKeyboardButton("🧭 Не той екран", callback_data=f"rejtmpl_{u_id}_{p_id}_wrong_screen"),
@@ -194,7 +194,7 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
         stage_row = [
             InlineKeyboardButton("↪️ Skip етап", callback_data=f"skip_{u_id}_{stage}"),
             InlineKeyboardButton("🏁 Finish замовлення", callback_data=f"finish_{u_id}"),
-            InlineKeyboardButton("💬 Msg користувачу", callback_data=f"msg_{u_id}"),
+            InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}"),
         ]
         return InlineKeyboardMarkup([action_row, tmpl_row, tmpl_row2, stage_row])
 
@@ -219,7 +219,7 @@ async def _debounced_send_album(album_key: Tuple[int, int, int, int], username: 
                 photo=file_id,
                 caption=caption,
                 parse_mode="HTML",
-                reply_markup=moderation_keyboard(user_id, photo_db_id, stage_db),
+                reply_markup=moderation_keyboard(user_id, photo_db_id, stage_db, order_id),
             )
         except Exception as e:
             logger.warning("Не вдалося переслати фото в адмін-групу: %s", e)
@@ -233,7 +233,7 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     - rejtmpl_{user_id}_{photo_db_id}_{key}
     - skip_{user_id}_{stage_db}
     - finish_{user_id}
-    - msg_{user_id}
+    Note: msg functionality moved to Stage2 mgr_msg_{order_id} pattern
     """
     query = update.callback_query
     await query.answer()
@@ -263,7 +263,7 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             _, str_user_id, str_stage = parts
             user_id = int(str_user_id)
             stage_db = int(str_stage)
-        elif action in ("finish", "msg"):
+        elif action == "finish":
             _, str_user_id = parts
             user_id = int(str_user_id)
         else:
@@ -370,14 +370,6 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.exception("finish action error: %s", e)
         return ConversationHandler.END
 
-    if action == "msg":
-        context.user_data['msg_user_id'] = user_id
-        try:
-            await query.edit_message_caption(caption="💬 Введіть текст повідомлення для користувача в чаті.")
-        except Exception:
-            pass
-        return MANAGER_MESSAGE
-
     return ConversationHandler.END
 
 
@@ -413,19 +405,6 @@ async def reject_reason_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     return ConversationHandler.END
 
-
-async def manager_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Manager sends a freeform message to user after pressing Msg button."""
-    user_id = context.user_data.get('msg_user_id')
-    if not user_id:
-        return ConversationHandler.END
-    message = update.message.text
-    try:
-        await context.bot.send_message(chat_id=user_id, text=f"💬 Повідомлення менеджера: {message}")
-        await update.message.reply_text("✅ Повідомлення відправлено.")
-    except Exception:
-        pass
-    return ConversationHandler.END
 
 
 # ============= Helpers =============
@@ -593,8 +572,12 @@ async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank
             set_order_group_db(order_id, group_chat_id)
             logger.info("Order %s assigned to group %s (%s)", order_id, group_chat_id, group_name)
             msg = f"📢 Нова заявка від @{username} (ID: {user_id})\n🏦 {bank} — {action}\nOrderID: {order_id}"
+            # Create inline keyboard with always-available message button
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")]
+            ])
             try:
-                await context.bot.send_message(chat_id=group_chat_id, text=msg)
+                await context.bot.send_message(chat_id=group_chat_id, text=msg, reply_markup=keyboard)
             except Exception as e:
                 logger.warning("Не вдалося відправити повідомлення в групу %s: %s", group_chat_id, e)
             return True
@@ -634,6 +617,18 @@ async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYP
             try:
                 occupy_group_db_by_dbid(group_db_id)
                 set_order_group_db(new_order_id, group_chat_id)
+                logger.info("Order %s assigned to group %s from queue", new_order_id, group_chat_id)
+                
+                # Send assignment message to manager group with message button
+                msg = f"📢 Нова заявка від @{username} (ID: {user_id})\n🏦 {bank} — {action}\nOrderID: {new_order_id}"
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{new_order_id}")]
+                ])
+                try:
+                    await context.bot.send_message(chat_id=group_chat_id, text=msg, reply_markup=keyboard)
+                except Exception as e:
+                    logger.warning("Не вдалося відправити повідомлення в групу %s: %s", group_chat_id, e)
+                    
             except Exception as e:
                 logger.exception("Error occupying group or setting order group: %s", e)
 

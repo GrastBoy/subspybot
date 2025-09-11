@@ -3,9 +3,9 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler, filters
 )
 from db import conn, logger, BOT_TOKEN, LOCK_FILE
-from states import COOPERATION_INPUT, REJECT_REASON, MANAGER_MESSAGE
+from states import COOPERATION_INPUT, REJECT_REASON
 from handlers.menu_handlers import start, main_menu_handler, age_confirm_handler
-from handlers.photo_handlers import handle_photos, handle_admin_action, reject_reason_handler, manager_message_handler
+from handlers.photo_handlers import handle_photos, handle_admin_action, reject_reason_handler
 from handlers.cooperation_handlers import cooperation_start_handler, cooperation_receive, cancel
 from handlers.admin_handlers import (
     history, add_group, del_group, list_groups, show_queue,
@@ -38,8 +38,7 @@ def main():
         entry_points=[CallbackQueryHandler(cooperation_start_handler, pattern="menu_coop")],
         states={
             COOPERATION_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, cooperation_receive)],
-            REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, reject_reason_handler)],
-            MANAGER_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manager_message_handler)]
+            REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, reject_reason_handler)]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True
