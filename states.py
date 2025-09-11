@@ -16,6 +16,7 @@ REJECT_REASON = 1
 MANAGER_MESSAGE = 2
 STAGE2_MANAGER_WAIT_DATA = 10
 STAGE2_MANAGER_WAIT_CODE = 11
+STAGE2_MANAGER_WAIT_MSG = 12   # новий стан для повідомлення користувачу (Stage2)
 
 def find_age_requirement(bank: str, action: str) -> Optional[int]:
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])

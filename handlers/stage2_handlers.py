@@ -1,17 +1,19 @@
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from db import cursor, conn, ADMIN_GROUP_ID, log_action, logger
-from states import STAGE2_MANAGER_WAIT_DATA, STAGE2_MANAGER_WAIT_CODE
+from states import (
+    STAGE2_MANAGER_WAIT_DATA,
+    STAGE2_MANAGER_WAIT_CODE,
+    STAGE2_MANAGER_WAIT_MSG
+)
 
 PHONE_RE = re.compile(r"^\+?\d{9,15}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-# Якщо залишаєш кнопку "Запросити код" — можна використати rate limit, інакше не критично
-RATE_SECONDS_CODE = 30
 
 # ================== DB helpers ==================
 
@@ -32,7 +34,7 @@ def _update_order(order_id: int, **fields):
     cursor.execute(f"UPDATE orders SET {sets} WHERE id=?", vals)
     conn.commit()
 
-# ================== Generic send helper ==================
+# ================== Safe send helper ==================
 
 async def _safe_send(bot, chat_id: int, text: str, **kwargs):
     try:
@@ -40,7 +42,22 @@ async def _safe_send(bot, chat_id: int, text: str, **kwargs):
     except Exception as e:
         logger.warning("Failed to send message to %s: %s", chat_id, e)
 
-# ================== Keyboard rendering ==================
+# ================== Keyboards ==================
+
+def _manager_data_keyboard(order_id: int, show_code: bool = False):
+    # Початковий або очікуючий стан: дані ще не надано
+    row1 = [InlineKeyboardButton("Надати дані", callback_data=f"mgr_provide_data_{order_id}")]
+    # Код ще не можна (немає телефону) – залишимо неактивним або не показуватимемо
+    rows = [row1]
+    rows.append([InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")])
+    return InlineKeyboardMarkup(rows)
+
+def _manager_actions_keyboard(order_id: int):
+    # Після отримання даних – можна дати код і писати
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Надати код", callback_data=f"mgr_provide_code_{order_id}")],
+        [InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")]
+    ])
 
 def _render_stage2_keyboard(order):
     (oid, user_id, username, bank, action, stage, status, group_id,
@@ -55,7 +72,7 @@ def _render_stage2_keyboard(order):
         if stage2_status == "idle":
             buttons.append([InlineKeyboardButton("📄 Запросити дані", callback_data=f"s2_req_data_{oid}")])
         elif stage2_status == "waiting_manager_data":
-            # Ніяких зайвих кнопок
+            # без кнопок
             pass
         elif stage2_status == "data_received":
             buttons.append([InlineKeyboardButton("🔑 Запросити код", callback_data=f"s2_req_code_{oid}")])
@@ -66,7 +83,6 @@ def _render_stage2_keyboard(order):
 
         if (not stage2_complete) and phone_verified and email_verified:
             buttons.append([InlineKeyboardButton("⏭ Перейти далі", callback_data=f"s2_continue_{oid}")])
-
     return InlineKeyboardMarkup(buttons)
 
 async def _send_stage2_ui(user_id: int, order_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -95,8 +111,8 @@ async def _send_stage2_ui(user_id: int, order_id: int, context: ContextTypes.DEF
         lines.append(f"Статус коду: {phone_code_status}")
     if stage2_complete:
         lines.append("✅ Етап 2 завершено. Можете продовжити.")
-    kb = _render_stage2_keyboard(order)
-    await _safe_send(context.bot, user_id, "\n".join(lines), reply_markup=kb)
+
+    await _safe_send(context.bot, user_id, "\n".join(lines), reply_markup=_render_stage2_keyboard(order))
 
 # ================== Helpers ==================
 
@@ -108,6 +124,52 @@ def _extract_order_id(data: str) -> Optional[int]:
         return int(parts[-1])
     except ValueError:
         return None
+
+async def _notify_managers_after_data(order_id: int, context: ContextTypes.DEFAULT_TYPE):
+    order = _get_order_core(order_id)
+    if not order:
+        return
+    (_, user_id, username, bank, action, _, _, _, phone, email,
+     phone_verified, email_verified, phone_code_status, *_rest) = order
+    txt = (
+        f"📨 Дані отримано (Order {order_id}).\n"
+        f"👤 @{username or 'Без_ніка'} (ID: {user_id})\n"
+        f"🏦 {bank} / {action}\n"
+        f"📞 Телефон: {phone or '—'} ({'✅' if phone_verified else '❌'})\n"
+        f"📧 Email: {email or '—'} ({'✅' if email_verified else '❌'})\n"
+        f"🔐 Код: {phone_code_status}\n"
+        f"➡️ Доступні дії: Надати код / Написати користувачу"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=txt,
+            reply_markup=_manager_actions_keyboard(order_id)
+        )
+        log_action(order_id, "system", "provide_data_notify")
+    except Exception as e:
+        logger.warning("Failed notify managers after data: %s", e)
+
+async def _notify_managers_request_code(order_id: int, context: ContextTypes.DEFAULT_TYPE):
+    order = _get_order_core(order_id)
+    if not order:
+        return
+    (_, user_id, username, bank, action, *_r) = order
+    txt = (
+        f"🔑 Запит коду (Order {order_id}).\n"
+        f"👤 @{username or 'Без_ніка'} (ID: {user_id})\n"
+        f"🏦 {bank} / {action}\n"
+        f"➡️ Натисніть 'Надати код' або напишіть користувачу."
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=txt,
+            reply_markup=_manager_actions_keyboard(order_id)
+        )
+        log_action(order_id, "system", "request_code_notify")
+    except Exception as e:
+        logger.warning("Failed notify managers request code: %s", e)
 
 # ================== USER CALLBACKS ==================
 
@@ -121,13 +183,12 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     cursor.execute("""SELECT user_id, stage2_status, phone_verified, email_verified,
-                             stage2_complete, phone_code_status, phone_code_last_sent_at
-                      FROM orders WHERE id=?""", (order_id,))
+                             stage2_complete, phone_code_status FROM orders WHERE id=?""", (order_id,))
     row = cursor.fetchone()
     if not row:
         await query.edit_message_text("❌ Замовлення не знайдено.")
         return
-    order_user_id, stage2_status, phone_verified, email_verified, stage2_complete, phone_code_status, phone_code_last_sent_at = row
+    order_user_id, stage2_status, phone_verified, email_verified, stage2_complete, phone_code_status = row
     if order_user_id != user_id:
         await query.edit_message_text("⛔ Це не ваше замовлення.")
         return
@@ -140,11 +201,11 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
                     text=f"📨 Order {order_id}: користувач запросив номер і пошту.",
-                    reply_markup=_manager_data_inline(order_id)
+                    reply_markup=_manager_data_keyboard(order_id)
                 )
             except Exception as e:
-                logger.warning("Notify admin group fail: %s", e)
-            await query.edit_message_text("🔄 Запит відправлено менеджеру.")
+                logger.warning("Manager notify (req data) fail: %s", e)
+            await query.edit_message_text("🔄 Запит відправлено. Очікуємо менеджера.")
         elif stage2_status == "waiting_manager_data":
             await query.edit_message_text("⌛ Очікуємо менеджера.")
         elif stage2_status == "data_received":
@@ -153,16 +214,15 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if data.startswith("s2_req_code_"):
-        if stage2_status != "data_received":
+        cursor.execute("SELECT stage2_status FROM orders WHERE id=?", (order_id,))
+        st = cursor.fetchone()[0]
+        if st != "data_received":
             await query.edit_message_text("Спочатку мають бути надані номер та email.")
             return
-        new_session = int(datetime.utcnow().timestamp())
-        _update_order(order_id,
-                      phone_code_status="requested",
-                      phone_code_session=new_session,
-                      phone_code_last_sent_at=datetime.utcnow().isoformat())
-        log_action(order_id, "user", "stage2_request_code", f"session={new_session}")
-        await query.edit_message_text("✅ Запит коду зафіксовано. Менеджер може надіслати код у будь-який момент.")
+        _update_order(order_id, phone_code_status="requested", phone_code_session=int(datetime.utcnow().timestamp()))
+        log_action(order_id, "user", "stage2_request_code")
+        await query.edit_message_text("✅ Запит коду зафіксовано. Очікуйте.")
+        await _notify_managers_request_code(order_id, context)
         await _send_stage2_ui(user_id, order_id, context)
         return
 
@@ -185,7 +245,7 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("Так", callback_data=f"s2_phone_confirm_yes_{order_id}"),
              InlineKeyboardButton("Назад", callback_data=f"s2_phone_confirm_back_{order_id}")]
         ])
-        await query.edit_message_text("Підтвердити, що номер успішно верифіковано?", reply_markup=kb)
+        await query.edit_message_text("Підтвердити, що номер верифіковано?", reply_markup=kb)
         return
 
     if data.startswith("s2_email_confirm_"):
@@ -214,15 +274,7 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await query.edit_message_text("Невідома дія (Stage2).")
 
-# ================== MANAGER SIDE ==================
-
-def _manager_data_inline(order_id: int):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Надати дані", callback_data=f"mgr_provide_data_{order_id}")],
-        [InlineKeyboardButton("Надати код", callback_data=f"mgr_provide_code_{order_id}")],
-        [InlineKeyboardButton("Телефон підтверджено", callback_data=f"mgr_force_phone_{order_id}")],
-        [InlineKeyboardButton("Пошта підтверджена", callback_data=f"mgr_force_email_{order_id}")]
-    ])
+# ================== MANAGER CALLBACKS ==================
 
 async def manager_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -231,32 +283,32 @@ async def manager_stage2_callback(update: Update, context: ContextTypes.DEFAULT_
     parts = data.split("_")
     if len(parts) < 3:
         return
-    action_group = parts[1]          # provide | force
+    action_group = parts[1]          # provide | msg
     sub_action = parts[2] if len(parts) > 3 else ""
     try:
         order_id = int(parts[-1])
     except ValueError:
         return
 
-    cursor.execute("""SELECT user_id, stage2_status, phone_verified, email_verified, phone_number, email
+    cursor.execute("""SELECT user_id, stage2_status, phone_number, email,
+                             phone_verified, email_verified
                       FROM orders WHERE id=?""", (order_id,))
     r = cursor.fetchone()
     if not r:
         await query.edit_message_text("Order not found.")
         return
-    user_id, stage2_status, phone_verified, email_verified, phone_number, email = r
+    user_id, stage2_status, phone_number, email, phone_verified, email_verified = r
 
     # provide data
     if action_group == "provide" and sub_action == "data":
-        # Дозволяємо навіть з idle
         if stage2_status == "idle":
             _update_order(order_id, stage2_status="waiting_manager_data")
         if stage2_status not in ("waiting_manager_data", "idle"):
-            await query.edit_message_text(f"Надання даних не доступне (status={stage2_status}).")
+            await query.edit_message_text(f"Надання даних недоступне (status={stage2_status}).")
             return
         await query.edit_message_text(
-            "Надішліть номер і email (разом або окремо).\n"
-            "Приклади:\n+380931234567 user@mail.com\nабо:\n+380931234567\nuser@mail.com"
+            "Надішліть номер і email (разом або окремо):\n"
+            "+380931234567 user@mail.com\nабо окремими повідомленнями."
         )
         context.user_data['stage2_order_id'] = order_id
         context.user_data['stage2_partial_phone'] = None
@@ -266,53 +318,28 @@ async def manager_stage2_callback(update: Update, context: ContextTypes.DEFAULT_
     # provide code
     if action_group == "provide" and sub_action == "code":
         if not phone_number:
-            await query.edit_message_text("Спочатку надайте номер/email.")
+            await query.edit_message_text("Спочатку потрібно надати номер та email.")
             return
         await query.edit_message_text("Введіть код (3–8 цифр).")
         context.user_data['stage2_order_id'] = order_id
         return STAGE2_MANAGER_WAIT_CODE
 
-    # force phone
-    if action_group == "force" and sub_action == "phone":
-        cursor.execute("SELECT email_verified FROM orders WHERE id=?", (order_id,))
-        ev = cursor.fetchone()[0]
-        _update_order(order_id, phone_verified=1, phone_code_status="confirmed")
-        if ev:
-            _update_order(order_id, stage2_complete=1)
-        log_action(order_id, "manager", "force_phone")
-        await _notify_both(context, query, user_id,
-                           "Телефон підтверджено вручну.",
-                           "📞 Ваш номер підтверджено менеджером.")
-        return
-
-    # force email
-    if action_group == "force" and sub_action == "email":
-        cursor.execute("SELECT phone_verified FROM orders WHERE id=?", (order_id,))
-        pv = cursor.fetchone()[0]
-        _update_order(order_id, email_verified=1)
-        if pv:
-            _update_order(order_id, stage2_complete=1)
-        log_action(order_id, "manager", "force_email")
-        await _notify_both(context, query, user_id,
-                           "Пошта підтверджена вручну.",
-                           "📧 Ваша пошта підтверджена менеджером.")
-        return
+    # msg для користувача
+    if action_group == "msg":
+        # запуск стану введення повідомлення
+        context.user_data['stage2_msg_order_id'] = order_id
+        context.user_data['stage2_msg_user_id'] = user_id
+        await query.edit_message_text("💬 Введіть текст повідомлення користувачу (одним повідомленням).")
+        return STAGE2_MANAGER_WAIT_MSG
 
     await query.edit_message_text("Невідома дія (manager Stage2).")
-
-async def _notify_both(context: ContextTypes.DEFAULT_TYPE, query, user_id: int, manager_text: str, user_text: str):
-    try:
-        await query.edit_message_text(manager_text)
-    except Exception:
-        pass
-    await _safe_send(context.bot, user_id, user_text)
 
 # ================== Manager enters phone/email ==================
 
 async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id = context.user_data.get("stage2_order_id")
     if not order_id:
-        await update.message.reply_text("❌ Спочатку натисніть кнопку 'Надати дані'.")
+        await update.message.reply_text("❌ Спочатку натисніть 'Надати дані'.")
         return ConversationHandler.END
 
     cursor.execute("SELECT user_id, stage2_status FROM orders WHERE id=?", (order_id,))
@@ -331,7 +358,6 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = (update.message.text or "").strip()
 
-    # Дозволимо пробіли/дефіси у номері при вводі
     phone_match = re.search(r"(\+?\d[\d\s\-\(\)]{7,}\d)", text)
     email_match = re.search(r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})", text)
 
@@ -361,7 +387,7 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("✅ Email збережено. Надішліть номер.")
         return STAGE2_MANAGER_WAIT_DATA
 
-    # Обидва є
+    # Обидва є → зберігаємо
     _update_order(order_id,
                   phone_number=p,
                   email=e,
@@ -371,14 +397,14 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"✅ Дані збережено: {p} | {e}")
     await _safe_send(context.bot, user_id,
                      f"📨 Отримано дані:\nТелефон: {p}\nEmail: {e}\n"
-                     f"Можете підтвердити пошту / номер або дочекатися коду (якщо потрібен).")
+                     f"Можете підтвердити пошту / номер або (за потреби) натиснути '🔑 Запросити код'.")
 
-    # Очистка partial
     context.user_data.pop('stage2_partial_phone', None)
     context.user_data.pop('stage2_partial_email', None)
 
-    # Оновити UI користувачу
     await _send_stage2_ui(user_id, order_id, context)
+    await _notify_managers_after_data(order_id, context)
+
     return ConversationHandler.END
 
 # ================== Manager enters code ==================
@@ -391,7 +417,7 @@ async def manager_enter_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     code = (update.message.text or "").strip()
     if not re.fullmatch(r"\d{3,8}", code):
-        await update.message.reply_text("❌ Код має містити 3–8 цифр. Спробуйте ще раз.")
+        await update.message.reply_text("❌ Код має 3–8 цифр. Спробуйте ще раз.")
         return STAGE2_MANAGER_WAIT_CODE
 
     _update_order(order_id, phone_code_status="delivered")
@@ -404,6 +430,27 @@ async def manager_enter_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await _safe_send(context.bot, uid,
                      f"🔐 Код: {code}\nВведіть його у застосунку і після верифікації натисніть '📞 Номер підтверджено'.")
 
-    # Після відправки можна теж оновити UI (статус коду)
     await _send_stage2_ui(uid, order_id, context)
+    return ConversationHandler.END
+
+# ================== Manager enters free message ==================
+
+async def manager_enter_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    order_id = context.user_data.get("stage2_msg_order_id")
+    user_id = context.user_data.get("stage2_msg_user_id")
+    if not order_id or not user_id:
+        await update.message.reply_text("❌ Немає контексту для повідомлення.")
+        return ConversationHandler.END
+
+    text = (update.message.text or "").strip()
+    if not text:
+        await update.message.reply_text("⚠️ Порожнє повідомлення. Введіть текст або /cancel.")
+        return STAGE2_MANAGER_WAIT_MSG
+
+    log_action(order_id, "manager", "stage2_send_message", text)
+    await update.message.reply_text("✅ Повідомлення надіслано.")
+    await _safe_send(update.application.bot, user_id, f"💬 Повідомлення від менеджера:\n{text}")
+
+    context.user_data.pop("stage2_msg_order_id", None)
+    context.user_data.pop("stage2_msg_user_id", None)
     return ConversationHandler.END

@@ -3,9 +3,14 @@ from handlers.stage2_handlers import (
     user_stage2_callback,
     manager_stage2_callback,
     manager_enter_data,
-    manager_enter_code
+    manager_enter_code,
+    manager_enter_message
 )
-from states import STAGE2_MANAGER_WAIT_DATA, STAGE2_MANAGER_WAIT_CODE
+from states import (
+    STAGE2_MANAGER_WAIT_DATA,
+    STAGE2_MANAGER_WAIT_CODE,
+    STAGE2_MANAGER_WAIT_MSG
+)
 
 def build_stage2_handlers():
     return ConversationHandler(
@@ -19,6 +24,9 @@ def build_stage2_handlers():
             ],
             STAGE2_MANAGER_WAIT_CODE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, manager_enter_code)
+            ],
+            STAGE2_MANAGER_WAIT_MSG: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, manager_enter_message)
             ],
         },
         fallbacks=[],
