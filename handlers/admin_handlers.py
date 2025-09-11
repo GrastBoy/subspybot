@@ -1,4 +1,5 @@
 import os
+import json
 from telegram import Update
 from telegram.ext import ContextTypes
 from db import cursor, conn, ADMIN_ID, ADMIN_GROUP_ID, logger
@@ -292,6 +293,31 @@ async def orders_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("orders_stats error: %s", e)
         await update.message.reply_text("⚠️ Не вдалося отримати статистику.")
+
+async def stage2debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Адмін: /stage2debug <order_id> — показати поля Stage2 для діагностики."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Немає доступу")
+        return
+    if not context.args:
+        await update.message.reply_text("Використання: /stage2debug <order_id>")
+        return
+    try:
+        oid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("order_id має бути числом.")
+        return
+    cursor.execute("""SELECT id, user_id, phone_number, email, phone_verified, email_verified,
+                             phone_code_status, phone_code_session, stage2_status, stage2_complete
+                      FROM orders WHERE id=?""", (oid,))
+    row = cursor.fetchone()
+    if not row:
+        await update.message.reply_text("Не знайдено.")
+        return
+    keys = ["id","user_id","phone_number","email","phone_verified","email_verified",
+            "phone_code_status","phone_code_session","stage2_status","stage2_complete"]
+    data = dict(zip(keys, row))
+    await update.message.reply_text("Stage2:\n" + "\n".join(f"{k}: {v}" for k,v in data.items()))
 
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):

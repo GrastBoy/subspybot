@@ -10,7 +10,7 @@ from handlers.cooperation_handlers import cooperation_start_handler, cooperation
 from handlers.admin_handlers import (
     history, add_group, del_group, list_groups, show_queue,
     finish_order, finish_all_orders, orders_stats,
-    add_admin, remove_admin, list_admins, admin_help
+    add_admin, remove_admin, list_admins, stage2debug, admin_help
 )
 from handlers.status_handler import status
 from handlers.stage2_router import build_stage2_handlers
@@ -59,6 +59,7 @@ def main():
     app.add_handler(CommandHandler("add_admin", add_admin))
     app.add_handler(CommandHandler("remove_admin", remove_admin))
     app.add_handler(CommandHandler("list_admins", list_admins))
+    app.add_handler(CommandHandler("stage2debug", stage2debug))
     app.add_handler(CommandHandler("help", admin_help))
 
     logger.info("Бот запущений...")

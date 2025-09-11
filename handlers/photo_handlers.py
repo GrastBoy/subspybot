@@ -648,45 +648,50 @@ async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYP
         logger.exception("assign_queued_clients_to_free_groups error: %s", e)
 
 
-async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE, order_id: int = None):
+async def send_instruction(user_id: int, context, order_id: int = None):
     from states import INSTRUCTIONS
-    # Якщо order_id заданий явно (напр. з Stage2), беремо саме його
     if order_id is None:
-        state = user_states.get(user_id)
-        if not state:
+        st = user_states.get(user_id)
+        if not st:
             cursor.execute("SELECT id FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
             row = cursor.fetchone()
             if not row:
                 return
             order_id = row[0]
         else:
-            order_id = state.get("order_id")
+            order_id = st.get("order_id")
+
     cursor.execute("""SELECT id, bank, action, stage, status, group_id,
-        stage2_complete, stage2_status FROM orders WHERE id=?""", (order_id,))
+                             stage2_complete, stage2_status
+                      FROM orders WHERE id=?""", (order_id,))
     row = cursor.fetchone()
     if not row:
         return
-    order_id, bank, action, stage0, status, group_id, stage2_complete, stage2_status = row
+    (order_id, bank, action, stage0, status, group_id,
+     stage2_complete, stage2_status) = row
 
-    # В user_states кешуємо (не критично, але для сумісності з іншими частинами)
-    st = user_states.get(user_id)
-    if not st:
-        user_states[user_id] = {"order_id": order_id, "bank": bank, "action": action, "stage": stage0,
-                                "age_required": find_age_requirement(bank, action)}
+    if user_id not in user_states:
+        user_states[user_id] = {
+            "order_id": order_id,
+            "bank": bank,
+            "action": action,
+            "stage": stage0,
+            "age_required": find_age_requirement(bank, action)
+        }
 
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])
 
-    # ТРИГЕР Stage2: після завершення першого етапу (stage0 == 1) але поки stage2_complete == 0
-    # (припускаємо, що крок 0 — фото, потім Stage2, потім решта інструкцій з steps[1:] як потрібно)
-    if stage0 == 1 and not stage2_complete:
-        # Виводимо UI Stage2
+    # Stage2 тригер: як тільки ми закінчили перший крок (stage0 >= 1), але Stage2 ще не завершено
+    # (Раніше замовлення завершувалось при stage0 >= len(steps). Тепер не завершуємо, доки не завершено Stage2.)
+    if stage0 >= 1 and not stage2_complete:
         from handlers.stage2_handlers import _send_stage2_ui
         await _send_stage2_ui(user_id, order_id, context)
         return
 
-    # Якщо Stage2 завершено і stage0 == 1 -> можна перейти далі (інкремент стадії вже зроблено в Stage2 при continue)
-    # або якщо stage0 >= len(steps) -> завершення замовлення
-    if stage0 >= len(steps):
+    # Завершення тільки якщо:
+    #  - усі кроки пройдено (stage0 >= len(steps))
+    #  - Stage2 або не потрібний (stage0 <1) або вже завершений (stage2_complete == True)
+    if stage0 >= len(steps) and (stage0 < 1 or stage2_complete):
         cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
         conn.commit()
         if group_id:
@@ -697,35 +702,35 @@ async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE, ord
                 pass
         try:
             await context.bot.send_message(chat_id=user_id, text="✅ Ваше замовлення завершено. Дякуємо!")
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID,
-                                           text=f"✅ Замовлення {order_id} виконано.")
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=f"✅ Замовлення {order_id} виконано.")
         except Exception:
             pass
         user_states.pop(user_id, None)
         return
 
-    # Звичайна логіка відображення інструкції (для кроків ≠ Stage2)
-    step = steps[stage0]
-    text = step.get("text", "") if isinstance(step, dict) else str(step)
-    images = step.get("images", []) if isinstance(step, dict) else []
-    cursor.execute("UPDATE orders SET status=? WHERE id=?", (f"На етапі {stage0 + 1}", order_id))
-    conn.commit()
+    # Звичайний рендер кроку інструкцій
+    if stage0 < len(steps):
+        step = steps[stage0]
+        text = step.get("text", "") if isinstance(step, dict) else str(step)
+        images = step.get("images", []) if isinstance(step, dict) else []
+        cursor.execute("UPDATE orders SET status=? WHERE id=?", (f"На етапі {stage0 + 1}", order_id))
+        conn.commit()
 
-    if text:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            logger.warning("Не вдалося відправити текст інструкції: %s", e)
+        if text:
+            try:
+                await context.bot.send_message(chat_id=user_id, text=text)
+            except Exception as e:
+                logger.warning("Не вдалося відправити текст інструкції: %s", e)
 
-    for img in images:
-        try:
-            if isinstance(img, str) and os.path.exists(img):
-                with open(img, "rb") as f:
-                    await context.bot.send_photo(chat_id=user_id, photo=f)
-            else:
-                await context.bot.send_photo(chat_id=user_id, photo=img)
-        except Exception as e:
-            logger.warning("Не вдалося відправити зображення %s: %s", img, e)
+        for img in images:
+            try:
+                if isinstance(img, str) and os.path.exists(img):
+                    with open(img, "rb") as f:
+                        await context.bot.send_photo(chat_id=user_id, photo=f)
+                else:
+                    await context.bot.send_photo(chat_id=user_id, photo=img)
+            except Exception as e:
+                logger.warning("Не вдалося відправити зображення %s: %s", img, e)
 
 
 def _finish_user_latest_order_and_free_group(user_id: int):
