@@ -6,35 +6,24 @@ import atexit
 import signal
 from typing import Iterable
 
-# ================== Configuration ==================
-
-# Prefer environment variables for secrets.
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8303921633:AAFu3nvim6qggmkIq2ghg5EMrT-8RhjoP50")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "-4930176305"))
 
-# Support multiple admins via env "ADMIN_IDS"="123,456"; fallback to single ADMIN_ID
 _admin_ids_env = os.getenv("ADMIN_IDS")
 if _admin_ids_env:
     ADMIN_IDS = {int(x.strip()) for x in _admin_ids_env.split(",") if x.strip().isdigit()}
 else:
     ADMIN_IDS = {int(os.getenv("ADMIN_ID", "7797088374"))}
-
-# Backward compatibility alias for legacy imports: from db import ADMIN_ID
-# Pick a deterministic single admin (smallest) from the set
 ADMIN_ID = min(ADMIN_IDS) if ADMIN_IDS else None
 
 LOCK_FILE = os.getenv("LOCK_FILE", "bot.lock")
 DB_FILE = os.getenv("DB_FILE", "orders.db")
-
-# ================== Logging ==================
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# ================== Lock file (single instance guard) ==================
 
 def _cleanup_lock():
     try:
@@ -53,11 +42,9 @@ def _signal_handler(signum, frame):
         pass
     sys.exit(0)
 
-# Abort if another instance appears running
 if os.path.exists(LOCK_FILE):
     print("⚠️ bot.lock виявлено — ймовірно бот вже запущений. Завершую роботу.")
     sys.exit(1)
-# Create lock and ensure cleanup on exit/signals
 open(LOCK_FILE, "w").close()
 atexit.register(_cleanup_lock)
 for sig in (signal.SIGINT, signal.SIGTERM):
@@ -66,16 +53,12 @@ for sig in (signal.SIGINT, signal.SIGTERM):
     except Exception:
         pass
 
-# ================== Database connection ==================
-
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 conn.execute("PRAGMA foreign_keys = ON")
 conn.execute("PRAGMA journal_mode = WAL")
 conn.execute("PRAGMA synchronous = NORMAL")
 conn.execute("PRAGMA busy_timeout = 5000")
 cursor = conn.cursor()
-
-# ================== Schema ==================
 
 def _executescript(script: str):
     cursor.executescript(script)
@@ -109,12 +92,15 @@ def _ensure_indexes():
         CREATE INDEX IF NOT EXISTS ix_order_photos_order_stage
         ON order_photos(order_id, stage)
         """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS ix_actions_order_created
+        ON order_actions_log(order_id, created_at)
+        """)
         conn.commit()
     except Exception as e:
         logger.warning("Index creation warning: %s", e)
 
 def ensure_schema():
-    # orders
     _executescript("""
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,11 +111,21 @@ def ensure_schema():
         stage INTEGER DEFAULT 0,
         status TEXT,
         group_id INTEGER,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        -- Stage2 meta (may be NULL on older rows; added via migrations)
+        phone_number TEXT,
+        email TEXT,
+        phone_verified INTEGER DEFAULT 0,
+        email_verified INTEGER DEFAULT 0,
+        phone_code_status TEXT DEFAULT 'none',
+        phone_code_session INTEGER DEFAULT 0,
+        phone_code_last_sent_at DATETIME,
+        phone_code_attempts INTEGER DEFAULT 0,
+        stage2_status TEXT DEFAULT 'idle',
+        stage2_restart_count INTEGER DEFAULT 0,
+        stage2_complete INTEGER DEFAULT 0
     );
     """)
-
-    # order_photos
     _executescript("""
     CREATE TABLE IF NOT EXISTS order_photos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,24 +141,18 @@ def ensure_schema():
       FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
     );
     """)
-
-    # Migrations for existing DBs
-    _ensure_columns(
-        "order_photos",
-        required_cols=[
-            "file_unique_id", "active", "reason", "replace_of", "created_at"
-        ],
-        add_stmts={
-            "file_unique_id": "ALTER TABLE order_photos ADD COLUMN file_unique_id TEXT",
-            "active": "ALTER TABLE order_photos ADD COLUMN active INTEGER NOT NULL DEFAULT 1",
-            "reason": "ALTER TABLE order_photos ADD COLUMN reason TEXT",
-            "replace_of": "ALTER TABLE order_photos ADD COLUMN replace_of INTEGER",
-            "created_at": "ALTER TABLE order_photos ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
-        }
-    )
-
-    _ensure_indexes()
-
+    # action log
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS order_actions_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL,
+        actor TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        payload TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
+    """)
     # cooperation_requests
     _executescript("""
     CREATE TABLE IF NOT EXISTS cooperation_requests (
@@ -173,7 +163,6 @@ def ensure_schema():
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     """)
-
     # manager_groups
     _executescript("""
     CREATE TABLE IF NOT EXISTS manager_groups (
@@ -183,7 +172,6 @@ def ensure_schema():
         busy INTEGER DEFAULT 0
     );
     """)
-
     # queue
     _executescript("""
     CREATE TABLE IF NOT EXISTS queue (
@@ -195,10 +183,37 @@ def ensure_schema():
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # Migrations (ensure missing columns if old DB)
+    _ensure_columns("orders",
+        [
+            "phone_number","email","phone_verified","email_verified","phone_code_status","phone_code_session",
+            "phone_code_last_sent_at","phone_code_attempts","stage2_status","stage2_restart_count","stage2_complete"
+        ],
+        {
+            "phone_number": "ALTER TABLE orders ADD COLUMN phone_number TEXT",
+            "email": "ALTER TABLE orders ADD COLUMN email TEXT",
+            "phone_verified": "ALTER TABLE orders ADD COLUMN phone_verified INTEGER DEFAULT 0",
+            "email_verified": "ALTER TABLE orders ADD COLUMN email_verified INTEGER DEFAULT 0",
+            "phone_code_status": "ALTER TABLE orders ADD COLUMN phone_code_status TEXT DEFAULT 'none'",
+            "phone_code_session": "ALTER TABLE orders ADD COLUMN phone_code_session INTEGER DEFAULT 0",
+            "phone_code_last_sent_at": "ALTER TABLE orders ADD COLUMN phone_code_last_sent_at DATETIME",
+            "phone_code_attempts": "ALTER TABLE orders ADD COLUMN phone_code_attempts INTEGER DEFAULT 0",
+            "stage2_status": "ALTER TABLE orders ADD COLUMN stage2_status TEXT DEFAULT 'idle'",
+            "stage2_restart_count": "ALTER TABLE orders ADD COLUMN stage2_restart_count INTEGER DEFAULT 0",
+            "stage2_complete": "ALTER TABLE orders ADD COLUMN stage2_complete INTEGER DEFAULT 0"
+        }
+    )
+    _ensure_indexes()
 
 ensure_schema()
 
-# ================== Utilities ==================
+def log_action(order_id: int, actor: str, action_type: str, payload: str = None):
+    try:
+        cursor.execute("INSERT INTO order_actions_log (order_id, actor, action_type, payload) VALUES (?,?,?,?)",
+                       (order_id, actor, action_type, payload))
+        conn.commit()
+    except Exception as e:
+        logger.warning("log_action failed: %s", e)
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -212,8 +227,6 @@ def close_db():
     except Exception:
         pass
     _cleanup_lock()
-
-# ================== Sanity logs ==================
 
 logger.info("Database initialized at %s", os.path.abspath(DB_FILE))
 logger.info(

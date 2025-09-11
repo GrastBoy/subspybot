@@ -648,76 +648,74 @@ async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYP
         logger.exception("assign_queued_clients_to_free_groups error: %s", e)
 
 
-async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    # INSTRUCTIONS імпортуємо зі states
-    state = user_states.get(user_id)
-    if not state:
-        row = get_last_order_for_user(user_id)
-        if not row:
-            logger.warning("send_instruction: не знайдено замовлення для користувача %s", user_id)
-            try:
-                await context.bot.send_message(chat_id=user_id,
-                                               text="❌ Помилка: замовлення не знайдено. Почніть заново командою /start")
-            except Exception:
-                pass
-            return
-        order_id, bank, action, stage0, status, group_id = row[0], row[1], row[2], row[3], row[4], row[5]
+async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE, order_id: int = None):
+    from states import INSTRUCTIONS
+    # Якщо order_id заданий явно (напр. з Stage2), беремо саме його
+    if order_id is None:
+        state = user_states.get(user_id)
+        if not state:
+            cursor.execute("SELECT id FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return
+            order_id = row[0]
+        else:
+            order_id = state.get("order_id")
+    cursor.execute("""SELECT id, bank, action, stage, status, group_id,
+        stage2_complete, stage2_status FROM orders WHERE id=?""", (order_id,))
+    row = cursor.fetchone()
+    if not row:
+        return
+    order_id, bank, action, stage0, status, group_id, stage2_complete, stage2_status = row
+
+    # В user_states кешуємо (не критично, але для сумісності з іншими частинами)
+    st = user_states.get(user_id)
+    if not st:
         user_states[user_id] = {"order_id": order_id, "bank": bank, "action": action, "stage": stage0,
                                 "age_required": find_age_requirement(bank, action)}
-        state = user_states[user_id]
-
-    order_id = state.get("order_id")
-    bank = state.get("bank")
-    action = state.get("action")
-    stage0 = state.get("stage", 0)
 
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])
-    if not steps:
-        update_order_stage_db(order_id, stage0, status="Помилка: інструкції відсутні")
-        logger.warning("No instructions for %s %s (order %s)", bank, action, order_id)
-        try:
-            await context.bot.send_message(chat_id=user_id,
-                                           text="❌ Помилка: інструкції для обраного банку/операції відсутні. Зв'яжіться з адміністратором.")
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID,
-                                           text=f"⚠️ Для замовлення {order_id} немає інструкцій: {bank} {action}")
-        except Exception:
-            pass
+
+    # ТРИГЕР Stage2: після завершення першого етапу (stage0 == 1) але поки stage2_complete == 0
+    # (припускаємо, що крок 0 — фото, потім Stage2, потім решта інструкцій з steps[1:] як потрібно)
+    if stage0 == 1 and not stage2_complete:
+        # Виводимо UI Stage2
+        from handlers.stage2_handlers import _send_stage2_ui
+        await _send_stage2_ui(user_id, order_id, context)
         return
 
+    # Якщо Stage2 завершено і stage0 == 1 -> можна перейти далі (інкремент стадії вже зроблено в Stage2 при continue)
+    # або якщо stage0 >= len(steps) -> завершення замовлення
     if stage0 >= len(steps):
-        update_order_stage_db(order_id, stage0, status="Завершено")
-        order = get_order_by_id(order_id)
-        group_chat_id = order[7] if order else None
-        if group_chat_id:
+        cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
+        conn.commit()
+        if group_id:
             try:
-                free_group_db_by_chatid(group_chat_id)
+                cursor.execute("UPDATE manager_groups SET busy=0 WHERE group_id=?", (group_id,))
+                conn.commit()
             except Exception:
                 pass
         try:
             await context.bot.send_message(chat_id=user_id, text="✅ Ваше замовлення завершено. Дякуємо!")
-            if order:
-                await context.bot.send_message(chat_id=ADMIN_GROUP_ID,
-                                               text=f"✅ Замовлення {order_id} виконано для @{order[2]} (ID: {order[1]})")
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID,
+                                           text=f"✅ Замовлення {order_id} виконано.")
         except Exception:
             pass
         user_states.pop(user_id, None)
-        try:
-            await assign_queued_clients_to_free_groups(context)
-        except Exception:
-            pass
         return
 
+    # Звичайна логіка відображення інструкції (для кроків ≠ Stage2)
     step = steps[stage0]
     text = step.get("text", "") if isinstance(step, dict) else str(step)
     images = step.get("images", []) if isinstance(step, dict) else []
-
-    update_order_stage_db(order_id, stage0, status=f"На етапі {stage0 + 1}")
+    cursor.execute("UPDATE orders SET status=? WHERE id=?", (f"На етапі {stage0 + 1}", order_id))
+    conn.commit()
 
     if text:
         try:
             await context.bot.send_message(chat_id=user_id, text=text)
         except Exception as e:
-            logger.warning("Не вдалося відправити текст інструкції користувачу %s: %s", user_id, e)
+            logger.warning("Не вдалося відправити текст інструкції: %s", e)
 
     for img in images:
         try:
@@ -727,7 +725,7 @@ async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_photo(chat_id=user_id, photo=img)
         except Exception as e:
-            logger.warning("Не вдалося відправити зображення %s користувачу %s: %s", img, user_id, e)
+            logger.warning("Не вдалося відправити зображення %s: %s", img, e)
 
 
 def _finish_user_latest_order_and_free_group(user_id: int):

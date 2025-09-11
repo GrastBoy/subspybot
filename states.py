@@ -8,12 +8,14 @@ except Exception:
 BANKS_REGISTER = [bank for bank, actions in INSTRUCTIONS.items() if "register" in actions and actions["register"]]
 BANKS_CHANGE = [bank for bank, actions in INSTRUCTIONS.items() if "change" in actions and actions["change"]]
 
-user_states: Dict[int, Dict[str, Any]] = {}  # user_id -> {"order_id", "bank", "action", "stage", "age_required"}
+user_states: Dict[int, Dict[str, Any]] = {}
 
-# ConversationHandler states
+# Conversation states
 COOPERATION_INPUT = 0
 REJECT_REASON = 1
 MANAGER_MESSAGE = 2
+STAGE2_MANAGER_WAIT_DATA = 10
+STAGE2_MANAGER_WAIT_CODE = 11
 
 def find_age_requirement(bank: str, action: str) -> Optional[int]:
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])
@@ -23,11 +25,17 @@ def find_age_requirement(bank: str, action: str) -> Optional[int]:
     return None
 
 def get_required_photos(bank: str, action: str, stage0: int) -> Optional[int]:
-    """Повертає required_photos для заданого кроку (0-based). Якщо не задано — None."""
+    """
+    Повертає значення required_photos для конкретного етапу (0-based).
+    Якщо поле відсутнє або індекс виходить за межі — повертає None.
+    """
     try:
-        step = INSTRUCTIONS.get(bank, {}).get(action, [])[stage0]
+        steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+        step = steps[stage0]
         if isinstance(step, dict):
-            return step.get("required_photos")
+            val = step.get("required_photos")
+            if isinstance(val, int):
+                return val
     except Exception:
         pass
     return None
