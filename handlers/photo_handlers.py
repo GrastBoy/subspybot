@@ -378,7 +378,13 @@ async def _evaluate_stage_and_notify(user_id: int, order_id: int, stage_db: int,
 
         try:
             await context.bot.send_message(chat_id=user_id, text="✅ Всі ваші скріни підтверджено. Переходимо на наступний етап.")
-            await send_instruction(user_id, context)
+            
+            # Check if this is stage 1 completion (screenshots) and should start registration flow
+            if new_stage0 == 1:  # Just completed stage 0 (screenshots), now at stage 1
+                from handlers.registration_handlers import start_registration_flow
+                await start_registration_flow(user_id, order_id, context)
+            else:
+                await send_instruction(user_id, context)
         except Exception as e:
             logger.warning("Не вдалося надіслати інструкцію наступного етапу: %s", e)
 
@@ -551,6 +557,38 @@ async def send_instruction(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     bank = state.get("bank")
     action = state.get("action")
     stage0 = state.get("stage", 0)
+
+    # Check if we're in registration stages (1-5) and registration is not completed
+    if stage0 == 1:  # Stage 1 - should be handled by registration flow
+        try:
+            # Check registration status from database
+            cursor.execute("SELECT registration_stage, phone_verified, email_verified FROM orders WHERE id = ?", (order_id,))
+            reg_result = cursor.fetchone()
+            
+            if reg_result:
+                reg_stage, phone_verified, email_verified = reg_result[0], reg_result[1], reg_result[2]
+                
+                # If registration is not completed (stage < 5 or not both verified), 
+                # don't send regular instructions yet
+                if reg_stage < 5 or not (phone_verified and email_verified):
+                    logger.info("Order %s is in registration flow (reg_stage=%s, phone_verified=%s, email_verified=%s), skipping regular instructions", 
+                               order_id, reg_stage, phone_verified, email_verified)
+                    return
+                    
+                # Registration completed, continue with regular instructions but adjust stage
+                logger.info("Registration completed for order %s, continuing with regular instructions from stage 2", order_id)
+                # Move to stage 2 (after registration) for regular instructions
+                stage0 = 2
+                user_states[user_id]['stage'] = stage0
+                update_order_stage_db(order_id, stage0, status=f"На етапі {stage0 + 1}")
+            else:
+                # No registration data, start registration flow
+                from handlers.registration_handlers import start_registration_flow
+                await start_registration_flow(user_id, order_id, context)
+                return
+        except Exception as e:
+            logger.exception("Error checking registration status for order %s: %s", order_id, e)
+            # Continue with regular instructions as fallback
 
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])
     if not steps:
