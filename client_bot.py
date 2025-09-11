@@ -8,6 +8,7 @@ from states import COOPERATION_INPUT, REJECT_REASON, MANAGER_MESSAGE
 from handlers.menu_handlers import start, main_menu_handler, age_confirm_handler
 from handlers.photo_handlers import handle_photos, handle_admin_action, reject_reason_handler, manager_message_handler
 from handlers.cooperation_handlers import cooperation_start_handler, cooperation_receive, cancel
+from handlers.registration_handlers import handle_extended_registration_callback, handle_registration_text_input
 from handlers.admin_handlers import (
     history, add_group, del_group, list_groups, show_queue,
     finish_order, finish_all_orders, orders_stats,
@@ -28,6 +29,12 @@ def main():
     app.add_handler(CallbackQueryHandler(main_menu_handler, pattern="^(menu_banks|menu_info|back_to_main|type_register|type_change|bank_.*)$"))
     app.add_handler(CallbackQueryHandler(age_confirm_handler, pattern="^age_confirm_.*$"))
     app.add_handler(CallbackQueryHandler(handle_admin_action, pattern="^(approve|reject|skip|finish|msg)_.*$"))
+    
+    # Registration flow handlers
+    app.add_handler(CallbackQueryHandler(handle_extended_registration_callback, pattern="^(s2_|s3_|s4_|s5_).*$"))
+    
+    # Text message handlers - registration first, then photos
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_registration_text_input))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photos))
 
     conv_handler = ConversationHandler(

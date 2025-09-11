@@ -125,9 +125,29 @@ def ensure_schema():
         stage INTEGER DEFAULT 0,
         status TEXT,
         group_id INTEGER,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        phone_number TEXT,
+        phone_verified INTEGER DEFAULT 0,
+        email TEXT,
+        email_verified INTEGER DEFAULT 0,
+        registration_stage INTEGER DEFAULT 0
     );
     """)
+    
+    # Add registration-related columns to existing orders table
+    _ensure_columns(
+        "orders",
+        required_cols=[
+            "phone_number", "phone_verified", "email", "email_verified", "registration_stage"
+        ],
+        add_stmts={
+            "phone_number": "ALTER TABLE orders ADD COLUMN phone_number TEXT",
+            "phone_verified": "ALTER TABLE orders ADD COLUMN phone_verified INTEGER DEFAULT 0",
+            "email": "ALTER TABLE orders ADD COLUMN email TEXT",
+            "email_verified": "ALTER TABLE orders ADD COLUMN email_verified INTEGER DEFAULT 0",
+            "registration_stage": "ALTER TABLE orders ADD COLUMN registration_stage INTEGER DEFAULT 0",
+        }
+    )
 
     # order_photos
     _executescript("""
