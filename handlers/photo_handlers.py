@@ -28,25 +28,17 @@ REJECT_TEMPLATES = {
 # ============= Core handlers (photos review flow) =============
 
 async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Accept one or many screenshots from user (single, series, or Telegram album).
-    Aggregate them per (user, order, stage, media_group_id) and send to managers once.
-    Only the largest PhotoSize of a Telegram photo is stored/sent.
-    """
+    # (без змін)
     msg = update.message
     if not msg or not msg.photo:
         return
-
     user = msg.from_user
     user_id = user.id
     username = (user.username or "").strip() or "Без_ніка"
-
-    # Validate session/state
     state = user_states.get(user_id)
     if not state:
         await msg.reply_text("Спочатку оберіть банк командою /start")
         return
-
     order_id = state.get("order_id")
     if not order_id:
         cursor.execute("SELECT id FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
@@ -56,35 +48,22 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         order_id = r[0]
         user_states[user_id]["order_id"] = order_id
-
-    # We store photos in DB as 1-based stage for clarity in admin messages
     current_stage_db = (state.get("stage", 0) if state else 0) + 1
-
-    # Take only the largest PhotoSize for this message
     largest = msg.photo[-1]
     file_id = largest.file_id
     file_unique_id = largest.file_unique_id
-
-    # Grouping key: user, order, stage, media_group (or fallback to message_id)
     media_group_id = getattr(msg, "media_group_id", None)
     group_discriminator = media_group_id if media_group_id is not None else msg.message_id
     album_key = (user_id, order_id, current_stage_db, group_discriminator)
-
-    # Aggregate this photo in memory; prevent duplicates by file_unique_id within the album
     album_list = pending_albums.setdefault(album_key, [])
     if file_unique_id not in [fu for _, fu in album_list]:
         album_list.append((file_id, file_unique_id))
-
-    # Debounce: cancel previous timer and start a fresh one
     prev_timer = pending_timers.get(album_key)
     if prev_timer and not prev_timer.done():
         prev_timer.cancel()
-
     pending_timers[album_key] = context.application.create_task(
         _debounced_send_album(album_key, username, context)
     )
-
-    # Inform user
     try:
         await msg.reply_text("✅ Ваші скріни на перевірці. Очікуйте рішення менеджера.")
     except Exception:
@@ -509,7 +488,7 @@ def create_order_in_db(user_id: int, username: str, bank: str, action: str) -> i
         "INSERT INTO orders (user_id, username, bank, action, stage, status) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, username, bank, action, 0, "На етапі 1")
     )
-    conn.commit
+    conn.commit()  # FIX: було без дужок
     return cursor.lastrowid
 
 
@@ -682,7 +661,6 @@ async def send_instruction(user_id: int, context, order_id: int = None):
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])
 
     # Stage2 тригер: як тільки ми закінчили перший крок (stage0 >= 1), але Stage2 ще не завершено
-    # (Раніше замовлення завершувалось при stage0 >= len(steps). Тепер не завершуємо, доки не завершено Stage2.)
     if stage0 >= 1 and not stage2_complete:
         from handlers.stage2_handlers import _send_stage2_ui
         await _send_stage2_ui(user_id, order_id, context)

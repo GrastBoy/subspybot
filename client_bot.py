@@ -10,11 +10,12 @@ from handlers.cooperation_handlers import cooperation_start_handler, cooperation
 from handlers.admin_handlers import (
     history, add_group, del_group, list_groups, show_queue,
     finish_order, finish_all_orders, orders_stats,
-    add_admin, remove_admin, list_admins, stage2debug, admin_help
+    add_admin, remove_admin, list_admins, stage2debug, admin_help,
+    tmpl_list, tmpl_set, tmpl_del
 )
 from handlers.status_handler import status
 from handlers.stage2_router import build_stage2_handlers
-from handlers.stage2_handlers import stage2_user_text
+from handlers.stage2_handlers import stage2_user_text, set_current_order_cmd
 
 def main():
     if BOT_TOKEN in ("", "CHANGE_ME_PLEASE"):
@@ -62,6 +63,16 @@ def main():
     app.add_handler(CommandHandler("list_admins", list_admins))
     app.add_handler(CommandHandler("stage2debug", stage2debug))
     app.add_handler(CommandHandler("help", admin_help))
+
+    # Templates management (admin)
+    app.add_handler(CommandHandler("tmpl_list", tmpl_list))
+    app.add_handler(CommandHandler("tmpl_set", tmpl_set))
+    app.add_handler(CommandHandler("tmpl_del", tmpl_del))
+
+    # Group quick switch current order: /o <id>
+    app.add_handler(CommandHandler("order", set_current_order_cmd))
+
+    # User -> managers autobridge (private text)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, stage2_user_text))
 
     logger.info("Бот запущений...")

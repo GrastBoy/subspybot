@@ -10,6 +10,7 @@ from handlers.photo_handlers import (
     assign_queued_clients_to_free_groups,
 )
 from states import user_states
+from handlers.templates_store import list_templates, set_template, del_template
 
 ADMINS_FILE = "admins.txt"
 
@@ -337,5 +338,45 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>/orders_stats</b> — Статистика замовлень.\n"
         "<b>/myorders</b> — Список ваших замовлень (для користувача).\n"
         "<b>/order &lt;order_id&gt;</b> — Картка замовлення (для адміна).\n"
+        "<b>/tmpl_list</b> — список текстових шаблонів для швидких відповідей.\n"
+        "<b>/tmpl_set &lt;key&gt; &lt;text&gt;</b> — створити/оновити шаблон.\n"
+        "<b>/tmpl_del &lt;key&gt;</b> — видалити шаблон.\n"
+        "<b>/o &lt;order_id&gt;</b> — встановити поточне замовлення в цій групі.\n"
     )
     await update.message.reply_text(text, parse_mode="HTML")
+
+# ============= Templates admin commands =============
+
+async def tmpl_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+    data = list_templates()
+    if not data:
+        return await update.message.reply_text("📭 Шаблонів немає.")
+    lines = ["🧩 Шаблони:"]
+    for k, v in data.items():
+        preview = (v[:60] + "…") if len(v) > 60 else v
+        lines.append(f"• !{k} — {preview}")
+    await update.message.reply_text("\n".join(lines))
+
+async def tmpl_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text("Використання: /tmpl_set <key> <text>")
+    key = context.args[0].strip()
+    text = " ".join(context.args[1:]).strip()
+    set_template(key, text)
+    await update.message.reply_text(f"✅ Шаблон !{key} збережено.")
+
+async def tmpl_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+    if not context.args:
+        return await update.message.reply_text("Використання: /tmpl_del <key>")
+    key = context.args[0].strip()
+    ok = del_template(key)
+    if ok:
+        await update.message.reply_text(f"🗑 Видалено шаблон !{key}.")
+    else:
+        await update.message.reply_text("❌ Немає такого ключа.")

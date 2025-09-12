@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -11,10 +11,15 @@ from states import (
     STAGE2_MANAGER_WAIT_CODE,
     STAGE2_MANAGER_WAIT_MSG,
 )
+from handlers.templates_store import get_template
 
 PHONE_RE = re.compile(r"^\+?\d{9,15}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-CODE_RE = re.compile(r"^\d{3,8}$")  # 3–8 digits
+CODE_RE = re.compile(r"^\d{3,8}$")  # 3–8 цифр
+ORDER_TAG_RE = re.compile(r"#(\d+)")
+ORDER_ID_IN_TEXT_RE = re.compile(r"(?:OrderID|Order)\D*(\d+)")
+
+CODE_REMINDER_MINUTES = 5
 
 # ================== DB helpers ==================
 
@@ -35,7 +40,12 @@ def _update_order(order_id: int, **fields):
     cursor.execute(f"UPDATE orders SET {sets} WHERE id=?", vals)
     conn.commit()
 
-def _get_user_active_order(user_id: int) -> Optional[tuple]:
+def _get_order_group_chat(order_id: int) -> int:
+    cursor.execute("SELECT group_id FROM orders WHERE id=?", (order_id,))
+    row = cursor.fetchone()
+    return row[0] if row and row[0] else ADMIN_GROUP_ID
+
+def _get_user_active_order(user_id: int):
     cursor.execute("""
         SELECT id,user_id,username,bank,action,stage,status,group_id,
                phone_number,email,phone_verified,email_verified,
@@ -46,11 +56,6 @@ def _get_user_active_order(user_id: int) -> Optional[tuple]:
         ORDER BY id DESC LIMIT 1
     """, (user_id,))
     return cursor.fetchone()
-
-def _get_order_group_chat(order_id: int) -> int:
-    cursor.execute("SELECT group_id FROM orders WHERE id=?", (order_id,))
-    row = cursor.fetchone()
-    return row[0] if row and row[0] else ADMIN_GROUP_ID
 
 # ================== Safe send helper ==================
 
@@ -63,14 +68,12 @@ async def _safe_send(bot, chat_id: int, text: str, **kwargs):
 # ================== Keyboards ==================
 
 def _manager_data_keyboard(order_id: int):
-    # Початковий / очікувальний стан: можна надати дані та завжди написати юзеру
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Надати дані", callback_data=f"mgr_provide_data_{order_id}")],
         [InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")]
     ])
 
 def _manager_actions_keyboard(order_id: int):
-    # Після отримання даних – можна дати код і написати юзеру
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Надати код", callback_data=f"mgr_provide_code_{order_id}")],
         [InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")]
@@ -153,6 +156,74 @@ def _set_current_stage2_order(context: ContextTypes.DEFAULT_TYPE, chat_id: int, 
     except Exception:
         pass
 
+def _expand_template_if_any(text: str, order_id: int) -> str:
+    """
+    If text starts with !<key>, expand it using templates_store.
+    Supports placeholders: {order_id}, {username}, {bank}, {action}.
+    """
+    if not text.startswith("!"):
+        return text
+    token = text.split()[0][1:]  # !hello -> hello
+    tpl = get_template(token)
+    if not tpl:
+        return text  # unknown template, send as-is
+    # fetch order fields
+    row = _get_order_core(order_id)
+    if not row:
+        return tpl
+    _, user_id, username, bank, action, *_ = row
+    return tpl.format(
+        order_id=order_id,
+        username=username or "Без_ніка",
+        bank=bank or "",
+        action=action or ""
+    )
+
+# ================== Code reminder jobs ==================
+
+async def _code_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    data = job.data or {}
+    order_id = data.get("order_id")
+    chat_id = data.get("chat_id")
+    if not order_id or not chat_id:
+        return
+    cursor.execute("SELECT phone_code_status FROM orders WHERE id=?", (order_id,))
+    r = cursor.fetchone()
+    if not r:
+        return
+    status = r[0]
+    if status == "requested":
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⏰ Нагадування: користувач по Order {order_id} очікує код уже {CODE_REMINDER_MINUTES} хв."
+            )
+        except Exception:
+            pass
+
+def _schedule_code_reminder(order_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        job_queue = context.application.job_queue
+        # Cancel old
+        _cancel_code_reminder(order_id, context)
+        job_queue.run_once(
+            _code_reminder_job,
+            when=timedelta(minutes=CODE_REMINDER_MINUTES),
+            data={"order_id": order_id, "chat_id": chat_id},
+            name=f"code_reminder_{order_id}"
+        )
+    except Exception as e:
+        logger.warning("schedule code reminder failed: %s", e)
+
+def _cancel_code_reminder(order_id: int, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        job_queue = context.application.job_queue
+        for job in job_queue.get_jobs_by_name(f"code_reminder_{order_id}"):
+            job.schedule_removal()
+    except Exception:
+        pass
+
 # ================== Notifications to manager groups ==================
 
 async def _notify_managers_after_data(order_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -166,7 +237,8 @@ async def _notify_managers_after_data(order_id: int, context: ContextTypes.DEFAU
            f"🏦 {bank} / {action}\n"
            f"➡️ Дії: Надати код / 💬 Написати користувачу\n\n"
            f"Підказка: надішліть у чат <лише цифри 3–8> — це буде код користувачу.\n"
-           f"Будь-який інший текст — повідомлення користувачу.")
+           f"Будь-який інший текст — повідомлення користувачу.\n"
+           f"Також можна: #<id> або /o <id> щоб перемкнутися на інший ордер.")
     try:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -187,8 +259,7 @@ async def _notify_managers_request_code(order_id: int, context: ContextTypes.DEF
     txt = (f"🔑 Запит коду (Order {order_id}).\n"
            f"👤 @{username or 'Без_ніка'} (ID: {user_id})\n"
            f"🏦 {bank} / {action}\n"
-           f"➡️ Натисніть 'Надати код' або просто надішліть цифри 3–8 у чат.\n"
-           f"Будь-який інший текст — повідомлення користувачу.")
+           f"➡️ Надішліть цифри 3–8 у чат — це буде код. Будь-який інший текст — повідомлення користувачу.")
     try:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -196,11 +267,12 @@ async def _notify_managers_request_code(order_id: int, context: ContextTypes.DEF
             reply_markup=_manager_actions_keyboard(order_id)
         )
         _set_current_stage2_order(context, chat_id, order_id)
+        _schedule_code_reminder(order_id, chat_id, context)
         log_action(order_id, "system", "request_code_notify")
     except Exception as e:
         logger.warning("Failed to notify managers request code: %s", e)
 
-# ================== USER CALLBACKS (кнопки користувача) ==================
+# ================== USER CALLBACKS ==================
 
 async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -263,6 +335,7 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await _send_stage2_ui(user_id, order_id, context)
             return
         _update_order(order_id, phone_verified=1, phone_code_status="confirmed")
+        _cancel_code_reminder(order_id, context)
         log_action(order_id, "user", "phone_confirm")
         if email_verified:
             _update_order(order_id, stage2_complete=1)
@@ -290,7 +363,6 @@ async def user_stage2_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if data.startswith("s2_reply_"):
-        # Просто підказка — відповідайте текстом, і його отримає менеджер (автоматичний бридж)
         await query.edit_message_text("💬 Напишіть ваше повідомлення тут — воно автоматично буде надіслане менеджеру.")
         return
 
@@ -337,7 +409,6 @@ async def manager_stage2_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     user_id, stage2_status, phone_number, email = r
 
-    # provide data
     if action_group == "provide" and sub_action == "data":
         if stage2_status == "idle":
             _update_order(order_id, stage2_status="waiting_manager_data")
@@ -354,7 +425,6 @@ async def manager_stage2_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['stage2_partial_email'] = None
         return STAGE2_MANAGER_WAIT_DATA
 
-    # provide code
     if action_group == "provide" and sub_action == "code":
         if not phone_number:
             await query.edit_message_text("Спочатку потрібно надати номер та email.",
@@ -365,36 +435,39 @@ async def manager_stage2_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['stage2_order_id'] = order_id
         return STAGE2_MANAGER_WAIT_CODE
 
-    # msg: вмикаємо "режим листування" — будь-який текст із цієї групи піде користувачу як повідомлення
     if action_group == "msg":
         _set_current_stage2_order(context, chat_id, order_id)
         await query.edit_message_text(
             "💬 Режим листування активний для цього замовлення.\n"
             "— Надішліть текст у чат: він піде користувачу.\n"
-            "— Надішліть лише цифри (3–8): це буде код.",
+            "— Надішліть лише цифри (3–8): це буде код.\n"
+            "— Можна використовувати шаблони: !hello, !wait_code, !after_code ...",
             reply_markup=_manager_actions_keyboard(order_id)
         )
         return ConversationHandler.END
 
     await query.edit_message_text("Невідома дія (manager Stage2).")
 
-# Admin group free text: auto-detect code and auto-forward messages to current order
+# Admin group free text: auto-detect code, auto-forward messages, #id switch, reply-based switch, templates
 async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not msg.text:
         return
     chat_id = msg.chat_id
-
-    # Працюємо лише в групі менеджерів (або в прив'язній групі замовлення)
-    # Якщо в проекті кілька груп — просто переконайтесь, що хендлер додано для кожної або використовуйте Chat filter.
-    # Тут припускаємо, що цей хендлер підписаний на групи з менеджерами.
-    # Захист: якщо менеджер у стані відхилення/вводу даних/коду — не перехоплюємо
-    if context.user_data.get("reject_user_id") or context.user_data.get("stage2_order_id"):
-        return
-
     text = msg.text.strip()
 
-    # Визначити активне замовлення: з chat_data або останнє data_received
+    # 0) Set current order by tag or reply
+    tag = ORDER_TAG_RE.search(text) or (ORDER_ID_IN_TEXT_RE.search(msg.reply_to_message.text) if msg.reply_to_message and msg.reply_to_message.text else None)
+    if tag:
+        try:
+            order_id = int(tag.group(1))
+            _set_current_stage2_order(context, chat_id, order_id)
+            await msg.reply_text(f"✅ Поточне замовлення встановлено: Order {order_id}")
+            return
+        except Exception:
+            pass
+
+    # 1) Determine current order
     chat_store = context.application.chat_data.get(chat_id, {})
     order_id = chat_store.get("stage2_current_order_id")
 
@@ -409,18 +482,19 @@ async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             order_id = r[0]
 
     if not order_id:
-        return  # немає контексту Stage2 — ігноруємо текст
+        return  # no context
 
-    # Отримати користувача
+    # 2) Get user id
     cursor.execute("SELECT user_id FROM orders WHERE id=?", (order_id,))
     r = cursor.fetchone()
     if not r:
         return
     user_id = r[0]
 
-    # Якщо лише цифри -> це код
+    # 3) Code?
     if CODE_RE.fullmatch(text):
         _update_order(order_id, phone_code_status="delivered")
+        _cancel_code_reminder(order_id, context)
         log_action(order_id, "manager", "provide_code_auto", text)
 
         await msg.reply_text(f"✅ Код надіслано користувачу (Order {order_id}).",
@@ -430,7 +504,10 @@ async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_stage2_ui(user_id, order_id, context)
         return
 
-    # Інакше — це звичайне повідомлення менеджера
+    # 4) Template expand if "!key"
+    text = _expand_template_if_any(text, order_id)
+
+    # 5) Manager free message
     log_action(order_id, "manager", "stage2_send_message_auto", text)
     await _safe_send(context.bot, user_id, f"💬 Повідомлення від менеджера:\n{text}",
                      reply_markup=_user_reply_keyboard(order_id))
@@ -454,7 +531,7 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if stage2_status not in ("waiting_manager_data", "idle"):
         if stage2_status == "data_received":
-            await update.message.reply_text("ℹ️ Дані вже надані.")
+            await update.message.reply_text("ℹ️ Дані вже надані.", reply_markup=_manager_actions_keyboard(order_id))
         else:
             await update.message.reply_text(f"❌ Статус не дозволяє вводити дані: {stage2_status}")
         return ConversationHandler.END
@@ -490,7 +567,6 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("✅ Email збережено. Надішліть номер.")
         return STAGE2_MANAGER_WAIT_DATA
 
-    # Обидва є → зберігаємо
     _update_order(order_id,
                   phone_number=p,
                   email=e,
@@ -506,7 +582,6 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await _send_stage2_ui(user_id, order_id, context)
     await _notify_managers_after_data(order_id, context)
 
-    # Очистка partial
     context.user_data.pop('stage2_partial_phone', None)
     context.user_data.pop('stage2_partial_email', None)
     context.user_data.pop('stage2_order_id', None)
@@ -525,6 +600,7 @@ async def manager_enter_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return STAGE2_MANAGER_WAIT_CODE
 
     _update_order(order_id, phone_code_status="delivered")
+    _cancel_code_reminder(order_id, context)
     log_action(order_id, "manager", "provide_code", code)
 
     cursor.execute("SELECT user_id FROM orders WHERE id=?", (order_id,))
@@ -540,11 +616,13 @@ async def manager_enter_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ================== Bi-directional chat bridge ==================
 
-# 1) Користувач пише текст — автоматично пересилаємо в групу менеджерів замовлення
 async def stage2_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not msg.text:
         return
+    if update.effective_chat and update.effective_chat.type != "private":
+        return
+
     user_id = msg.from_user.id
     text = msg.text.strip()
 
@@ -554,7 +632,6 @@ async def stage2_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id = order[0]
     group_chat_id = order[7] if order[7] else ADMIN_GROUP_ID
 
-    # Переслати менеджеру(ам)
     header = f"💬 Повідомлення від користувача (Order {order_id}, @{order[2] or 'Без_ніка'} | ID {user_id}):"
     try:
         await context.bot.send_message(
@@ -567,9 +644,7 @@ async def stage2_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning("Failed to forward user text to managers: %s", e)
 
-# 2) Менеджер пише текст у групі — автоматично пересилаємо користувачу (реалізовано у stage2_group_text)
-
-# ================== Manager free message via state (не обовʼязковий, залишено для сумісності) ==================
+# ================== Manager free message via state (optional) ==================
 
 async def manager_enter_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id = context.user_data.get("stage2_msg_order_id")
@@ -592,3 +667,23 @@ async def manager_enter_message(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop("stage2_msg_order_id", None)
     context.user_data.pop("stage2_msg_user_id", None)
     return ConversationHandler.END
+
+# ================== Quick command: /o <id> in groups ==================
+
+async def set_current_order_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg or not context.args:
+        await msg.reply_text("Використання: /o <order_id>")
+        return
+    try:
+        order_id = int(context.args[0])
+    except Exception:
+        await msg.reply_text("order_id має бути числом.")
+        return
+    cursor.execute("SELECT 1 FROM orders WHERE id=?", (order_id,))
+    if not cursor.fetchone():
+        await msg.reply_text("❌ Замовлення не знайдено.")
+        return
+    chat_id = msg.chat_id
+    _set_current_stage2_order(context, chat_id, order_id)
+    await msg.reply_text(f"✅ Поточне замовлення встановлено: Order {order_id}")
