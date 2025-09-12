@@ -14,6 +14,7 @@ from handlers.admin_handlers import (
 )
 from handlers.status_handler import status
 from handlers.stage2_router import build_stage2_handlers
+from handlers.stage2_handlers import stage2_user_text
 
 def main():
     if BOT_TOKEN in ("", "CHANGE_ME_PLEASE"):
@@ -61,6 +62,7 @@ def main():
     app.add_handler(CommandHandler("list_admins", list_admins))
     app.add_handler(CommandHandler("stage2debug", stage2debug))
     app.add_handler(CommandHandler("help", admin_help))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, stage2_user_text))
 
     logger.info("Бот запущений...")
     app.run_polling()
