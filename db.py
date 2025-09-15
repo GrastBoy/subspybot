@@ -96,6 +96,27 @@ def _ensure_indexes():
         CREATE INDEX IF NOT EXISTS ix_actions_order_created
         ON order_actions_log(order_id, created_at)
         """)
+        # New indexes for enhanced functionality
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS ix_bank_data_usage_bank_phone
+        ON bank_data_usage(bank, phone_number)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS ix_bank_data_usage_bank_email
+        ON bank_data_usage(bank, email)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS ix_manager_active_orders_group
+        ON manager_active_orders(group_id, is_primary)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS ix_manager_groups_bank
+        ON manager_groups(bank, is_admin_group)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS ix_bank_instructions_bank_action
+        ON bank_instructions(bank_name, action, step_number)
+        """)
         conn.commit()
     except Exception as e:
         logger.warning("Index creation warning: %s", e)
@@ -163,13 +184,15 @@ def ensure_schema():
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     """)
-    # manager_groups
+    # manager_groups - extended to support bank-specific groups
     _executescript("""
     CREATE TABLE IF NOT EXISTS manager_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER UNIQUE,
         name TEXT,
-        busy INTEGER DEFAULT 0
+        busy INTEGER DEFAULT 0,
+        bank TEXT,  -- NULL for admin groups, specific bank name for bank groups
+        is_admin_group INTEGER DEFAULT 0  -- 1 for admin groups that can see all orders
     );
     """)
     _executescript("""
@@ -177,6 +200,65 @@ def ensure_schema():
         bank TEXT PRIMARY KEY,
         show_register INTEGER NOT NULL DEFAULT 1,
         show_change INTEGER NOT NULL DEFAULT 1
+    );
+    """)
+    # bank data uniqueness tracking
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS bank_data_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bank TEXT NOT NULL,
+        phone_number TEXT,
+        email TEXT,
+        order_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
+    """)
+    # order forms/questionnaires
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS order_forms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL,
+        form_data TEXT,  -- JSON with all form information
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
+    """)
+    # active order tracking for managers
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS manager_active_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL,
+        order_id INTEGER NOT NULL,
+        is_primary INTEGER DEFAULT 0,  -- 1 for primary active order
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
+    """)
+    # bank management table
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS banks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        is_active INTEGER DEFAULT 1,
+        register_enabled INTEGER DEFAULT 1,
+        change_enabled INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    # bank instructions table
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS bank_instructions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bank_name TEXT NOT NULL,
+        action TEXT NOT NULL,  -- 'register' or 'change'
+        step_number INTEGER NOT NULL,
+        instruction_text TEXT,
+        instruction_images TEXT,  -- JSON array of image URLs/IDs
+        age_requirement INTEGER,
+        required_photos INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(bank_name) REFERENCES banks(name) ON DELETE CASCADE
     );
     """)
     # queue
@@ -210,6 +292,14 @@ def ensure_schema():
             "stage2_complete": "ALTER TABLE orders ADD COLUMN stage2_complete INTEGER DEFAULT 0"
         }
     )
+    # Migrations for manager_groups
+    _ensure_columns("manager_groups",
+                    ["bank", "is_admin_group"],
+        {
+            "bank": "ALTER TABLE manager_groups ADD COLUMN bank TEXT",
+            "is_admin_group": "ALTER TABLE manager_groups ADD COLUMN is_admin_group INTEGER DEFAULT 0"
+        }
+    )
     _ensure_indexes()
 
 ensure_schema()
@@ -224,6 +314,177 @@ def log_action(order_id: int, actor: str, action_type: str, payload: str = None)
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+# New utility functions for enhanced functionality
+def check_data_uniqueness(bank: str, phone_number: str = None, email: str = None) -> tuple:
+    """Check if phone/email were used for this bank before. Returns (phone_used, email_used)"""
+    phone_used = False
+    email_used = False
+    
+    if phone_number:
+        cursor.execute("SELECT COUNT(*) FROM bank_data_usage WHERE bank=? AND phone_number=?", 
+                      (bank, phone_number))
+        phone_used = cursor.fetchone()[0] > 0
+    
+    if email:
+        cursor.execute("SELECT COUNT(*) FROM bank_data_usage WHERE bank=? AND email=?", 
+                      (bank, email))
+        email_used = cursor.fetchone()[0] > 0
+    
+    return phone_used, email_used
+
+def record_data_usage(order_id: int, bank: str, phone_number: str = None, email: str = None):
+    """Record that phone/email were used for this bank in this order"""
+    try:
+        cursor.execute("INSERT INTO bank_data_usage (order_id, bank, phone_number, email) VALUES (?,?,?,?)",
+                      (order_id, bank, phone_number, email))
+        conn.commit()
+    except Exception as e:
+        logger.warning("record_data_usage failed: %s", e)
+
+def add_manager_group(group_id: int, name: str, bank: str = None, is_admin: bool = False) -> bool:
+    """Add a new manager group"""
+    try:
+        cursor.execute("INSERT INTO manager_groups (group_id, name, bank, is_admin_group) VALUES (?,?,?,?)",
+                      (group_id, name, bank, 1 if is_admin else 0))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("add_manager_group failed: %s", e)
+        return False
+
+def get_bank_groups(bank: str = None):
+    """Get manager groups for a specific bank or all groups if bank is None"""
+    if bank:
+        cursor.execute("SELECT group_id, name FROM manager_groups WHERE bank=? OR is_admin_group=1", (bank,))
+    else:
+        cursor.execute("SELECT group_id, name, bank, is_admin_group FROM manager_groups")
+    return cursor.fetchall()
+
+def set_active_order_for_group(group_id: int, order_id: int, is_primary: bool = True):
+    """Set an active order for a manager group"""
+    try:
+        if is_primary:
+            # Clear other primary orders for this group
+            cursor.execute("UPDATE manager_active_orders SET is_primary=0 WHERE group_id=?", (group_id,))
+        
+        # Check if this order is already active for this group
+        cursor.execute("SELECT id FROM manager_active_orders WHERE group_id=? AND order_id=?", 
+                      (group_id, order_id))
+        if cursor.fetchone():
+            cursor.execute("UPDATE manager_active_orders SET is_primary=? WHERE group_id=? AND order_id=?",
+                          (1 if is_primary else 0, group_id, order_id))
+        else:
+            cursor.execute("INSERT INTO manager_active_orders (group_id, order_id, is_primary) VALUES (?,?,?)",
+                          (group_id, order_id, 1 if is_primary else 0))
+        conn.commit()
+    except Exception as e:
+        logger.warning("set_active_order_for_group failed: %s", e)
+
+def get_active_orders_for_group(group_id: int):
+    """Get all active orders for a manager group"""
+    cursor.execute("""
+        SELECT mao.order_id, mao.is_primary, o.user_id, o.username, o.bank, o.action, o.status
+        FROM manager_active_orders mao
+        JOIN orders o ON mao.order_id = o.id
+        WHERE mao.group_id = ?
+        ORDER BY mao.is_primary DESC, mao.created_at DESC
+    """, (group_id,))
+    return cursor.fetchall()
+
+def create_order_form(order_id: int, form_data: dict):
+    """Create order form/questionnaire"""
+    import json
+    try:
+        cursor.execute("INSERT INTO order_forms (order_id, form_data) VALUES (?,?)",
+                      (order_id, json.dumps(form_data, ensure_ascii=False)))
+        conn.commit()
+    except Exception as e:
+        logger.warning("create_order_form failed: %s", e)
+
+def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True) -> bool:
+    """Add a new bank"""
+    try:
+        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled) VALUES (?,?,?)",
+                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("add_bank failed: %s", e)
+        return False
+
+def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None) -> bool:
+    """Update bank settings"""
+    try:
+        updates = []
+        params = []
+        if register_enabled is not None:
+            updates.append("register_enabled=?")
+            params.append(1 if register_enabled else 0)
+        if change_enabled is not None:
+            updates.append("change_enabled=?")
+            params.append(1 if change_enabled else 0)
+        if is_active is not None:
+            updates.append("is_active=?")
+            params.append(1 if is_active else 0)
+        
+        if updates:
+            params.append(name)
+            cursor.execute(f"UPDATE banks SET {','.join(updates)} WHERE name=?", params)
+            conn.commit()
+            return True
+        return False
+    except Exception as e:
+        logger.warning("update_bank failed: %s", e)
+        return False
+
+def delete_bank(name: str) -> bool:
+    """Delete a bank (and its instructions)"""
+    try:
+        cursor.execute("DELETE FROM bank_instructions WHERE bank_name=?", (name,))
+        cursor.execute("DELETE FROM banks WHERE name=?", (name,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("delete_bank failed: %s", e)
+        return False
+
+def add_bank_instruction(bank_name: str, action: str, step_number: int, 
+                        instruction_text: str = None, instruction_images: list = None,
+                        age_requirement: int = None, required_photos: int = None) -> bool:
+    """Add bank instruction"""
+    import json
+    try:
+        images_json = json.dumps(instruction_images or [])
+        cursor.execute("""
+            INSERT INTO bank_instructions 
+            (bank_name, action, step_number, instruction_text, instruction_images, age_requirement, required_photos)
+            VALUES (?,?,?,?,?,?,?)
+        """, (bank_name, action, step_number, instruction_text, images_json, age_requirement, required_photos))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("add_bank_instruction failed: %s", e)
+        return False
+
+def get_banks():
+    """Get all banks"""
+    cursor.execute("SELECT name, is_active, register_enabled, change_enabled FROM banks ORDER BY name")
+    return cursor.fetchall()
+
+def get_bank_instructions(bank_name: str, action: str = None):
+    """Get instructions for a bank"""
+    if action:
+        cursor.execute("""
+            SELECT step_number, instruction_text, instruction_images, age_requirement, required_photos
+            FROM bank_instructions WHERE bank_name=? AND action=? ORDER BY step_number
+        """, (bank_name, action))
+    else:
+        cursor.execute("""
+            SELECT action, step_number, instruction_text, instruction_images, age_requirement, required_photos
+            FROM bank_instructions WHERE bank_name=? ORDER BY action, step_number
+        """, (bank_name,))
+    return cursor.fetchall()
 
 def get_db():
     return conn, cursor
