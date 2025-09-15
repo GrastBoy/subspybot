@@ -423,6 +423,7 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <b>Множинні замовлення</b> — група може працювати з кількома замовленнями\n"
         "• <b>Перемикач замовлень</b> — <code>/o &lt;id&gt;</code> або <code>#123</code> у повідомленні"
     )
+
     await update.message.reply_text(text, parse_mode="HTML")
 
 # ============= Templates admin commands =============
@@ -526,6 +527,7 @@ async def bank_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE bank_visibility SET show_change=0 WHERE bank=?", (bank,))
     conn.commit()
     await update.message.reply_text(f"✅ Приховали '{bank}' для: {scope}")
+
 
 # ================ New Group and Order Management Commands ================
 
@@ -651,3 +653,4 @@ async def remove_order_from_group(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"✅ Замовлення #{order_id} видалено з активних")
     else:
         await update.message.reply_text("❌ Не вдалося видалити замовлення")
+

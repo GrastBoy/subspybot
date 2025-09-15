@@ -187,6 +187,13 @@ def ensure_schema():
         UNIQUE(group_id, order_id)
     );
     """)
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS bank_visibility (
+        bank TEXT PRIMARY KEY,
+        show_register INTEGER NOT NULL DEFAULT 1,
+        show_change INTEGER NOT NULL DEFAULT 1
+    );
+    """)
     # queue
     _executescript("""
     CREATE TABLE IF NOT EXISTS queue (
