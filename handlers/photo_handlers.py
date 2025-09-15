@@ -597,34 +597,129 @@ async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank
 
 
 async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced version with bank-specific group assignment"""
     try:
-        free_groups = get_free_groups()
-        if not free_groups:
+        from db import get_bank_group, get_admin_groups, add_active_order_to_group
+        
+        # Get queue items with their banks
+        cursor.execute("SELECT id, user_id, username, bank, action FROM queue ORDER BY id ASC")
+        queue_items = cursor.fetchall()
+        
+        if not queue_items:
             return
-
-        for group_db_id, group_chat_id in free_groups:
-            next_client = pop_queue_next()
-            if not next_client:
-                break
-            user_id, username, bank, action = next_client
-
-            new_order_id = create_order_in_db(user_id, username, bank, action)
-
-            try:
-                occupy_group_db_by_dbid(group_db_id)
-                set_order_group_db(new_order_id, group_chat_id)
-            except Exception as e:
-                logger.exception("Error occupying group or setting order group: %s", e)
-
-            user_states[user_id] = {"order_id": new_order_id, "bank": bank, "action": action, "stage": 0,
-                                    "age_required": find_age_requirement(bank, action)}
-            try:
-                await context.bot.send_message(chat_id=user_id, text="✅ Звільнилося місце! Починаємо реєстрацію.")
-                await send_instruction(user_id, context)
-            except Exception as e:
-                logger.warning("Не вдалося повідомити користувача після призначення з черги: %s", e)
+        
+        # Get all groups and their status
+        cursor.execute("""
+            SELECT group_id, name, bank, is_admin_group, busy 
+            FROM manager_groups ORDER BY is_admin_group DESC
+        """)
+        all_groups = cursor.fetchall()
+        
+        admin_groups = [g for g in all_groups if g[3] == 1]  # is_admin_group = 1
+        bank_groups = {g[2]: g for g in all_groups if g[3] == 0 and g[2]}  # bank-specific groups
+        universal_groups = [g for g in all_groups if g[3] == 0 and not g[2]]  # universal groups
+        
+        assigned_count = 0
+        
+        for queue_id, user_id, username, bank, action in queue_items:
+            assigned = False
+            target_group = None
+            
+            # Try to assign to bank-specific group first
+            if bank in bank_groups:
+                group_info = bank_groups[bank]
+                group_id = group_info[0]
+                # Check if this group is not too busy (simple check - can be enhanced)
+                cursor.execute("SELECT COUNT(*) FROM group_active_orders WHERE group_id=?", (group_id,))
+                active_count = cursor.fetchone()[0]
+                
+                if active_count < 5:  # Max 5 active orders per group
+                    target_group = group_info
+                    assigned = True
+            
+            # If no bank-specific group available, try universal groups
+            if not assigned:
+                for group_info in universal_groups:
+                    group_id = group_info[0]
+                    cursor.execute("SELECT COUNT(*) FROM group_active_orders WHERE group_id=?", (group_id,))
+                    active_count = cursor.fetchone()[0]
+                    
+                    if active_count < 5:  # Max 5 active orders per group
+                        target_group = group_info
+                        assigned = True
+                        break
+            
+            # If still not assigned, try admin groups as last resort
+            if not assigned:
+                for group_info in admin_groups:
+                    group_id = group_info[0]
+                    cursor.execute("SELECT COUNT(*) FROM group_active_orders WHERE group_id=?", (group_id,))
+                    active_count = cursor.fetchone()[0]
+                    
+                    if active_count < 10:  # Admin groups can handle more
+                        target_group = group_info
+                        assigned = True
+                        break
+            
+            if assigned and target_group:
+                group_id = target_group[0]
+                
+                # Create new order
+                new_order_id = create_order_in_db(user_id, username, bank, action)
+                
+                # Set order's group_id
+                cursor.execute("UPDATE orders SET group_id=? WHERE id=?", (group_id, new_order_id))
+                
+                # Add to active orders tracking
+                add_active_order_to_group(group_id, new_order_id, set_as_current=True)
+                
+                # Remove from queue
+                cursor.execute("DELETE FROM queue WHERE id=?", (queue_id,))
+                conn.commit()
+                
+                # Update user state
+                user_states[user_id] = {
+                    "order_id": new_order_id, 
+                    "bank": bank, 
+                    "action": action, 
+                    "stage": 0,
+                    "age_required": find_age_requirement(bank, action)
+                }
+                
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id, 
+                        text="✅ Звільнилося місце! Починаємо реєстрацію."
+                    )
+                    await send_instruction(user_id, context)
+                except Exception as e:
+                    logger.warning("Не вдалося повідомити користувача після призначення: %s", e)
+                
+                # Notify assigned group
+                try:
+                    group_name = target_group[1]
+                    await context.bot.send_message(
+                        chat_id=group_id,
+                        text=f"📝 Нове замовлення #{new_order_id}\n"
+                             f"👤 @{username or 'Без_ніка'} (ID: {user_id})\n"
+                             f"🏦 {bank} / {action}\n"
+                             f"📍 Почався етап 1"
+                    )
+                except Exception as e:
+                    logger.warning("Не вдалося повідомити групу про нове замовлення: %s", e)
+                
+                assigned_count += 1
+                
+                # Don't assign too many at once to avoid spam
+                if assigned_count >= 3:
+                    break
+        
+        if assigned_count > 0:
+            logger.info(f"Assigned {assigned_count} orders from queue to groups")
+            
     except Exception as e:
-        logger.exception("assign_queued_clients_to_free_groups error: %s", e)
+        logger.exception("Enhanced assign_queued_clients_to_free_groups error: %s", e)
 
 
 async def send_instruction(user_id: int, context, order_id: int = None):
