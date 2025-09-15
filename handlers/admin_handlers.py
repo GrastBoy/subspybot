@@ -1,11 +1,8 @@
 import os
-import json
 from telegram import Update
 from telegram.ext import ContextTypes
-from db import cursor, conn, ADMIN_ID, ADMIN_GROUP_ID, logger
+from db import cursor, conn, ADMIN_ID, logger
 from handlers.photo_handlers import (
-    get_last_order_for_user,
-    get_order_by_id,
     free_group_db_by_chatid,
     assign_queued_clients_to_free_groups,
 )
@@ -315,8 +312,8 @@ async def stage2debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         await update.message.reply_text("Не знайдено.")
         return
-    keys = ["id","user_id","phone_number","email","phone_verified","email_verified",
-            "phone_code_status","phone_code_session","stage2_status","stage2_complete"]
+    keys = ["id", "user_id", "phone_number", "email", "phone_verified", "email_verified",
+            "phone_code_status", "phone_code_session", "stage2_status", "stage2_complete"]
     data = dict(zip(keys, row))
     await update.message.reply_text("Stage2:\n" + "\n".join(f"{k}: {v}" for k,v in data.items()))
 

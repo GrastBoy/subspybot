@@ -46,7 +46,7 @@ def get_active_order_for_user(user_id: int) -> Optional[tuple]:
     )
     return cursor.fetchone()
 
-async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stage2_group_text_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Груповий текст у менеджерських групах:
     - '#123' або 'OrderID: 123' в тексті → зафіксувати поточне замовлення для групи
@@ -137,7 +137,7 @@ async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
-async def stage2_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stage2_user_text_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Приватний текст від користувача → у менеджерську групу його активного замовлення.
     """

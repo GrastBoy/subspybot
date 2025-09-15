@@ -6,8 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from db import cursor, conn, ADMIN_GROUP_ID, logger
-from states import user_states, find_age_requirement, REJECT_REASON, MANAGER_MESSAGE, get_required_photos
-from states import INSTRUCTIONS  # для доступу до всієї структури в разі потреби
+from states import user_states, find_age_requirement, REJECT_REASON, MANAGER_MESSAGE, get_required_photos, INSTRUCTIONS
 
 # Debounce/aggregation for photo albums and series
 DEBOUNCE_SECONDS = 1.8
@@ -628,7 +627,6 @@ async def assign_queued_clients_to_free_groups(context: ContextTypes.DEFAULT_TYP
 
 
 async def send_instruction(user_id: int, context, order_id: int = None):
-    from states import INSTRUCTIONS
     if order_id is None:
         st = user_states.get(user_id)
         if not st:

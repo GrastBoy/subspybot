@@ -6,14 +6,14 @@ import atexit
 import signal
 from typing import Iterable
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8303921633:AAFu3nvim6qggmkIq2ghg5EMrT-8RhjoP50")
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "-4930176305"))
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
 
 _admin_ids_env = os.getenv("ADMIN_IDS")
 if _admin_ids_env:
     ADMIN_IDS = {int(x.strip()) for x in _admin_ids_env.split(",") if x.strip().isdigit()}
 else:
-    ADMIN_IDS = {int(os.getenv("ADMIN_ID", "7797088374"))}
+    ADMIN_IDS = set()  # No default admin IDs for security
 ADMIN_ID = min(ADMIN_IDS) if ADMIN_IDS else None
 
 LOCK_FILE = os.getenv("LOCK_FILE", "bot.lock")
@@ -192,10 +192,10 @@ def ensure_schema():
     """)
     # Migrations (ensure missing columns if old DB)
     _ensure_columns("orders",
-        [
-            "phone_number","email","phone_verified","email_verified","phone_code_status","phone_code_session",
-            "phone_code_last_sent_at","phone_code_attempts","stage2_status","stage2_restart_count","stage2_complete"
-        ],
+                    [
+                        "phone_number", "email", "phone_verified", "email_verified", "phone_code_status", "phone_code_session",
+                        "phone_code_last_sent_at", "phone_code_attempts", "stage2_status", "stage2_restart_count", "stage2_complete"
+                    ],
         {
             "phone_number": "ALTER TABLE orders ADD COLUMN phone_number TEXT",
             "email": "ALTER TABLE orders ADD COLUMN email TEXT",
