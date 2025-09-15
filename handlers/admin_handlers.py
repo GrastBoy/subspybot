@@ -347,7 +347,6 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>/bank_show &lt;bank name&gt; [register|change|both]</b> — показати банк у списку.\n"
         "<b>/bank_hide &lt;bank name&gt; [register|change|both]</b> — приховати банк зі списку.\n"
     )
-    )
     await update.message.reply_text(text, parse_mode="HTML")
 
 # ============= Templates admin commands =============
