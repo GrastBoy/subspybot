@@ -1,11 +1,8 @@
 import os
-import json
 from telegram import Update
 from telegram.ext import ContextTypes
-from db import cursor, conn, ADMIN_ID, ADMIN_GROUP_ID, logger
+from db import cursor, conn, ADMIN_ID, logger
 from handlers.photo_handlers import (
-    get_last_order_for_user,
-    get_order_by_id,
     free_group_db_by_chatid,
     assign_queued_clients_to_free_groups,
 )
