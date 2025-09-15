@@ -18,7 +18,7 @@ async def myorders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lines = ["📋 Ваші замовлення:"]
     for oid, bank, action, stage, status, created in rows:
-        lines.append(f"• #{oid} — {bank}/{action}, етап {stage+1}, {status}, створено {created}")
+        lines.append(f"• #{oid} — {bank}/{action}, етап {stage + 1}, {status}, створено {created}")
     await update.message.reply_text("\n".join(lines))
 
 async def order_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,7 +51,7 @@ async def order_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 User: {uid} (@{uname or 'Без_ніка'})\n"
         f"🏦 {bank} / {action}\n"
         f"📍 Статус: {status}\n"
-        f"🧭 Етап: {stage+1}\n"
+        f"🧭 Етап: {stage + 1}\n"
         f"👥 Group: {group_id or '—'}\n"
         f"📞 Phone: {phone or '—'} ({_fmt_bool(pv)})\n"
         f"📧 Email: {email or '—'} ({_fmt_bool(ev)})\n"

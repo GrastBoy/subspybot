@@ -489,7 +489,9 @@ async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = msg.text.strip()
 
     # 0) Set current order by tag or reply
-    tag = ORDER_TAG_RE.search(text) or (ORDER_ID_IN_TEXT_RE.search(msg.reply_to_message.text) if msg.reply_to_message and msg.reply_to_message.text else None)
+    tag = ORDER_TAG_RE.search(text)
+    if not tag and msg.reply_to_message and msg.reply_to_message.text:
+        tag = ORDER_ID_IN_TEXT_RE.search(msg.reply_to_message.text)
     if tag:
         try:
             order_id = int(tag.group(1))

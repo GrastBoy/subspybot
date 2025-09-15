@@ -192,10 +192,10 @@ def ensure_schema():
     """)
     # Migrations (ensure missing columns if old DB)
     _ensure_columns("orders",
-        [
-            "phone_number", "email", "phone_verified", "email_verified", "phone_code_status", "phone_code_session",
-            "phone_code_last_sent_at", "phone_code_attempts", "stage2_status", "stage2_restart_count", "stage2_complete"
-        ],
+                    [
+                        "phone_number", "email", "phone_verified", "email_verified", "phone_code_status", "phone_code_session",
+                        "phone_code_last_sent_at", "phone_code_attempts", "stage2_status", "stage2_restart_count", "stage2_complete"
+                    ],
         {
             "phone_number": "ALTER TABLE orders ADD COLUMN phone_number TEXT",
             "email": "ALTER TABLE orders ADD COLUMN email TEXT",
