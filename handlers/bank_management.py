@@ -176,12 +176,17 @@ async def instructions_menu_handler(update: Update, context: ContextTypes.DEFAUL
     keyboard = [
         [InlineKeyboardButton("📋 Переглянути інструкції", callback_data="instructions_list")],
         [InlineKeyboardButton("➕ Додати інструкцію", callback_data="instructions_add")],
-        [InlineKeyboardButton("✏️ Редагувати інструкцію", callback_data="instructions_edit")],
-        [InlineKeyboardButton("🗑️ Видалити інструкцію", callback_data="instructions_delete")],
+        [InlineKeyboardButton("🔄 Синхронізувати в файл", callback_data="sync_to_file")],
         [InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")]
     ]
     
-    text = "📝 <b>Управління інструкціями</b>\n\nОберіть дію:"
+    text = "📝 <b>Управління інструкціями</b>\n\n"
+    text += "Тут ви можете керувати інструкціями для всіх банків:\n"
+    text += "• Переглянути існуючі інструкції\n"
+    text += "• Додати нові кроки\n"
+    text += "• Синхронізувати зміни в файл\n\n"
+    text += "Оберіть дію:"
+    
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 async def groups_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

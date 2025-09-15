@@ -83,6 +83,40 @@ def main():
     app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
     app.add_handler(CallbackQueryHandler(groups_menu_handler, pattern="^groups_menu$"))
     app.add_handler(CallbackQueryHandler(list_groups_handler, pattern="^groups_list$"))
+    
+    # Instruction management conversation
+    from handlers.instruction_management import (
+        instructions_list_handler, instructions_add_handler,
+        instruction_bank_select_handler, instruction_action_select_handler,
+        instruction_text_input_handler, instruction_add_another_handler,
+        cancel_instruction_conversation, manage_bank_instructions_cmd,
+        sync_instructions_to_file_cmd,
+        INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_TEXT_INPUT
+    )
+    conv_instruction_management = ConversationHandler(
+        entry_points=[CallbackQueryHandler(instructions_add_handler, pattern="^instructions_add$")],
+        states={
+            INSTR_BANK_SELECT: [CallbackQueryHandler(instruction_bank_select_handler, pattern="^instr_bank_.*$")],
+            INSTR_ACTION_SELECT: [CallbackQueryHandler(instruction_action_select_handler, pattern="^instr_action_.*$")],
+            INSTR_TEXT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, instruction_text_input_handler)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_instruction_conversation)],
+        per_chat=True
+    )
+    app.add_handler(conv_instruction_management)
+    
+    # Instruction management callbacks
+    app.add_handler(CallbackQueryHandler(instructions_list_handler, pattern="^instructions_list$"))
+    app.add_handler(CallbackQueryHandler(instruction_add_another_handler, pattern="^instr_add_another$"))
+    
+    # Add sync callback handler
+    async def sync_callback_handler(update, context):
+        query = update.callback_query
+        await query.answer()
+        if query.data == "sync_to_file":
+            await sync_instructions_to_file_cmd(update, context)
+    
+    app.add_handler(CallbackQueryHandler(sync_callback_handler, pattern="^sync_to_file$"))
 
     # Admin/user commands
     app.add_handler(CommandHandler("history", history))
@@ -125,6 +159,8 @@ def main():
     app.add_handler(CommandHandler("order_form", order_form_cmd))
     app.add_handler(CommandHandler("list_forms", list_forms_cmd))
     app.add_handler(CommandHandler("active_orders", active_orders_cmd))
+    app.add_handler(CommandHandler("manage_instructions", manage_bank_instructions_cmd))
+    app.add_handler(CommandHandler("sync_instructions", sync_instructions_to_file_cmd))
 
     logger.info("Бот запущений...")
     app.run_polling()
