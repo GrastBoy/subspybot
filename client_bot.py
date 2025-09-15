@@ -71,7 +71,7 @@ def main():
     app.add_handler(CommandHandler("tmpl_del", tmpl_del))
 
     # Group quick switch current order: /o <id>
-    app.add_handler(CommandHandler("order", set_current_order_cmd))
+    app.add_handler(CommandHandler("o", set_current_order_cmd))
 
     # User -> managers autobridge (private text)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, stage2_user_text))
