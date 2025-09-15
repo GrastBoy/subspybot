@@ -347,7 +347,7 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>/bank_show &lt;bank name&gt; [register|change|both]</b> — показати банк у списку.\n"
         "<b>/bank_hide &lt;bank name&gt; [register|change|both]</b> — приховати банк зі списку.\n"
     )
-    )
+
     await update.message.reply_text(text, parse_mode="HTML")
 
 # ============= Templates admin commands =============
@@ -451,3 +451,5 @@ async def bank_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE bank_visibility SET show_change=0 WHERE bank=?", (bank,))
     conn.commit()
     await update.message.reply_text(f"✅ Приховали '{bank}' для: {scope}")
+
+
