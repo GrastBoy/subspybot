@@ -182,11 +182,23 @@ def _extract_order_id(data: str) -> Optional[int]:
         return None
 
 def _set_current_stage2_order(context: ContextTypes.DEFAULT_TYPE, chat_id: int, order_id: int):
+    """Enhanced version that uses database tracking"""
     try:
+        # Update in-memory cache
         context.application.chat_data.setdefault(chat_id, {})
         context.application.chat_data[chat_id]["stage2_current_order_id"] = order_id
-    except Exception:
-        pass
+        
+        # Update database tracking
+        from db import set_current_order_for_group, add_active_order_to_group
+        
+        # Check if this is a group that we manage
+        cursor.execute("SELECT 1 FROM manager_groups WHERE group_id=?", (chat_id,))
+        if cursor.fetchone():
+            # Ensure the order is in active orders and set as current
+            add_active_order_to_group(chat_id, order_id, set_as_current=True)
+            
+    except Exception as e:
+        logger.warning("_set_current_stage2_order error: %s", e)
 
 def _expand_template_if_any(text: str, order_id: int) -> str:
     """
@@ -712,19 +724,76 @@ async def manager_enter_message(update: Update, context: ContextTypes.DEFAULT_TY
 # ================== Quick command: /o <id> in groups ==================
 
 async def set_current_order_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced /o command with better feedback and group support"""
     msg = update.message
-    if not msg or not context.args:
-        await msg.reply_text("Використання: /o <order_id>")
+    if not msg:
         return
+        
+    if not context.args:
+        # Show current active orders for this group
+        chat_id = msg.chat_id
+        from db import get_group_active_orders, get_current_order_for_group
+        
+        # Check if this is a managed group
+        cursor.execute("SELECT name FROM manager_groups WHERE group_id=?", (chat_id,))
+        group_info = cursor.fetchone()
+        
+        if group_info:
+            active_orders = get_group_active_orders(chat_id)
+            current_order = get_current_order_for_group(chat_id)
+            
+            if not active_orders:
+                await msg.reply_text("📭 Немає активних замовлень у цій групі.")
+                return
+            
+            text = f"📋 <b>Активні замовлення ({group_info[0]}):</b>\n\n"
+            
+            for order_id, is_current in active_orders:
+                # Get order details
+                cursor.execute("""
+                    SELECT user_id, username, bank, action, status 
+                    FROM orders WHERE id=?
+                """, (order_id,))
+                order_data = cursor.fetchone()
+                
+                if order_data:
+                    user_id, username, bank, action, status = order_data
+                    current_mark = "➤ " if is_current else "  "
+                    text += f"{current_mark}<b>#{order_id}</b> @{username or 'Без_ніка'} | {bank} {action} | <i>{status}</i>\n"
+            
+            text += f"\n💡 Поточне: #{current_order or 'не встановлено'}\n"
+            text += "Використання: <code>/o &lt;order_id&gt;</code> для перемикання"
+            
+            await msg.reply_text(text, parse_mode="HTML")
+        else:
+            await msg.reply_text("Використання: /o <order_id>")
+        return
+    
     try:
         order_id = int(context.args[0])
     except Exception:
-        await msg.reply_text("order_id має бути числом.")
+        await msg.reply_text("❌ order_id має бути числом.")
         return
-    cursor.execute("SELECT 1 FROM orders WHERE id=?", (order_id,))
-    if not cursor.fetchone():
+        
+    # Check if order exists
+    cursor.execute("SELECT user_id, username, bank, action, status FROM orders WHERE id=?", (order_id,))
+    order_data = cursor.fetchone()
+    if not order_data:
         await msg.reply_text("❌ Замовлення не знайдено.")
         return
+    
+    user_id, username, bank, action, status = order_data
     chat_id = msg.chat_id
+    
+    # Set as current order
     _set_current_stage2_order(context, chat_id, order_id)
-    await msg.reply_text(f"✅ Поточне замовлення встановлено: Order {order_id}")
+    
+    await msg.reply_text(
+        f"✅ <b>Поточне замовлення встановлено:</b>\n"
+        f"🆔 Order #{order_id}\n"
+        f"👤 @{username or 'Без_ніка'} (ID: {user_id})\n"
+        f"🏦 {bank} / {action}\n"
+        f"📍 {status}",
+        parse_mode="HTML",
+        reply_markup=_manager_actions_keyboard(order_id)
+    )
