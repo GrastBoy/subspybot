@@ -74,10 +74,42 @@ def _manager_data_keyboard(order_id: int):
     ])
 
 def _manager_actions_keyboard(order_id: int):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Надати код", callback_data=f"mgr_provide_code_{order_id}")],
-        [InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")]
-    ])
+    # Динамічна клавіатура дій менеджера:
+    # - «Надати дані» показуємо, доки stage2_status != 'data_received'
+    # - «Надати код» — завжди
+    # - «💬 Написати користувачу» — завжди
+    try:
+        order = _get_order_core(order_id)
+    except Exception:
+        order = None
+
+    btn_provide_data = InlineKeyboardButton("Надати дані", callback_data=f"mgr_provide_data_{order_id}")
+    btn_provide_code = InlineKeyboardButton("Надати код", callback_data=f"mgr_provide_code_{order_id}")
+    btn_msg = InlineKeyboardButton("💬 Написати користувачу", callback_data=f"mgr_msg_{order_id}")
+
+    buttons = []
+
+    if not order:
+        # Якщо раптом не дістався ордер — підстрахуємось і покажемо всі кнопки
+        buttons.append([btn_provide_data])
+        buttons.append([btn_provide_code])
+        buttons.append([btn_msg])
+        return InlineKeyboardMarkup(buttons)
+
+    # order = (id, user_id, username, bank, action, stage, status, group_id,
+    #          phone_number, email, phone_verified, email_verified,
+    #          phone_code_status, phone_code_session, phone_code_last_sent_at,
+    #          phone_code_attempts, stage2_status, stage2_restart_count, stage2_complete)
+    stage2_status = order[16]
+
+    if stage2_status != "data_received":
+        buttons.append([btn_provide_data])
+
+    buttons.append([btn_provide_code])
+    buttons.append([btn_msg])
+
+    return InlineKeyboardMarkup(buttons)
+
 
 def _user_reply_keyboard(order_id: int):
     return InlineKeyboardMarkup([
@@ -558,13 +590,22 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
     e = context.user_data.get('stage2_partial_email')
 
     if not p and not e:
-        await update.message.reply_text("❌ Не знайшов валідний номер або email. Надішліть ще раз.")
+        await update.message.reply_text(
+            "❌ Не знайшов валідний номер або email. Надішліть ще раз.",
+            reply_markup=_manager_data_keyboard(order_id)
+        )
         return STAGE2_MANAGER_WAIT_DATA
     if p and not e:
-        await update.message.reply_text("✅ Номер збережено. Надішліть email.")
+        await update.message.reply_text(
+            "✅ Номер збережено. Надішліть email.",
+            reply_markup=_manager_data_keyboard(order_id)
+        )
         return STAGE2_MANAGER_WAIT_DATA
     if e and not p:
-        await update.message.reply_text("✅ Email збережено. Надішліть номер.")
+        await update.message.reply_text(
+            "✅ Email збережено. Надішліть номер.",
+            reply_markup=_manager_data_keyboard(order_id)
+        )
         return STAGE2_MANAGER_WAIT_DATA
 
     _update_order(order_id,

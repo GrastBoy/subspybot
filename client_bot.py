@@ -11,7 +11,7 @@ from handlers.admin_handlers import (
     history, add_group, del_group, list_groups, show_queue,
     finish_order, finish_all_orders, orders_stats,
     add_admin, remove_admin, list_admins, stage2debug, admin_help,
-    tmpl_list, tmpl_set, tmpl_del
+    tmpl_list, tmpl_set, tmpl_del, banks, bank_show, bank_hide
 )
 from handlers.status_handler import status
 from handlers.stage2_router import build_stage2_handlers
@@ -74,6 +74,11 @@ def main():
 
     # User -> managers autobridge (private text)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, stage2_user_text))
+
+    # Banks visibility (admin)
+    app.add_handler(CommandHandler("banks", banks))
+    app.add_handler(CommandHandler("bank_show", bank_show))
+    app.add_handler(CommandHandler("bank_hide", bank_hide))
 
     logger.info("Бот запущений...")
     app.run_polling()

@@ -342,6 +342,11 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>/tmpl_set &lt;key&gt; &lt;text&gt;</b> — створити/оновити шаблон.\n"
         "<b>/tmpl_del &lt;key&gt;</b> — видалити шаблон.\n"
         "<b>/o &lt;order_id&gt;</b> — встановити поточне замовлення в цій групі.\n"
+        "<b>Керування банками:</b>\n"
+        "<b>/banks</b> — показати список банків та їх видимість для Реєстрації/Перевʼязу.\n"
+        "<b>/bank_show &lt;bank name&gt; [register|change|both]</b> — показати банк у списку.\n"
+        "<b>/bank_hide &lt;bank name&gt; [register|change|both]</b> — приховати банк зі списку.\n"
+    )
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -380,3 +385,69 @@ async def tmpl_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑 Видалено шаблон !{key}.")
     else:
         await update.message.reply_text("❌ Немає такого ключа.")
+
+# ============= Banks visibility management (admin) =============
+def _parse_bank_and_scope(args):
+    valid_scopes = {"register", "change", "both"}
+    scope = "both"
+    if not args:
+        return None, None
+    if args[-1].lower() in valid_scopes:
+        scope = args[-1].lower()
+        bank_name = " ".join(args[:-1]).strip()
+    else:
+        bank_name = " ".join(args).strip()
+    if not bank_name:
+        return None, None
+    return bank_name, scope
+
+async def banks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+    from db import cursor
+    cursor.execute("SELECT bank, show_register, show_change FROM bank_visibility")
+    rows = cursor.fetchall()
+    vis = {b: (sr, sc) for b, sr, sc in rows}
+
+    try:
+        from states import INSTRUCTIONS
+        all_banks = sorted(set(INSTRUCTIONS.keys()) | set(vis.keys()))
+    except Exception:
+        all_banks = sorted(set(vis.keys()))
+
+    lines = ["🏦 Банки (видимість у меню):"]
+    for b in all_banks:
+        sr, sc = vis.get(b, (1, 1))
+        lines.append(f"• {b} — Реєстрація: {'✅' if sr else '❌'}, Перевʼяз: {'✅' if sc else '❌'}")
+    lines.append("\nКерування: /bank_show <bank> [register|change|both], /bank_hide <bank> [register|change|both]")
+    await update.message.reply_text("\n".join(lines))
+
+async def bank_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+    from db import cursor, conn
+    bank, scope = _parse_bank_and_scope(context.args)
+    if not bank:
+        return await update.message.reply_text("Використання: /bank_show <bank name> [register|change|both]")
+    cursor.execute("INSERT OR IGNORE INTO bank_visibility (bank, show_register, show_change) VALUES (?, 1, 1)", (bank,))
+    if scope in ("register", "both"):
+        cursor.execute("UPDATE bank_visibility SET show_register=1 WHERE bank=?", (bank,))
+    if scope in ("change", "both"):
+        cursor.execute("UPDATE bank_visibility SET show_change=1 WHERE bank=?", (bank,))
+    conn.commit()
+    await update.message.reply_text(f"✅ Показуємо '{bank}' для: {scope}")
+
+async def bank_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+    from db import cursor, conn
+    bank, scope = _parse_bank_and_scope(context.args)
+    if not bank:
+        return await update.message.reply_text("Використання: /bank_hide <bank name> [register|change|both]")
+    cursor.execute("INSERT OR IGNORE INTO bank_visibility (bank, show_register, show_change) VALUES (?, 1, 1)", (bank,))
+    if scope in ("register", "both"):
+        cursor.execute("UPDATE bank_visibility SET show_register=0 WHERE bank=?", (bank,))
+    if scope in ("change", "both"):
+        cursor.execute("UPDATE bank_visibility SET show_change=0 WHERE bank=?", (bank,))
+    conn.commit()
+    await update.message.reply_text(f"✅ Приховали '{bank}' для: {scope}")

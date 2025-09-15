@@ -1,8 +1,28 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from states import BANKS_REGISTER, BANKS_CHANGE, user_states, find_age_requirement
-from db import ADMIN_GROUP_ID
+from states import user_states, find_age_requirement, INSTRUCTIONS
+from db import cursor
 from handlers.photo_handlers import create_order_in_db, assign_group_or_queue, send_instruction
+
+def _banks_from_instructions(action: str):
+    return [bank for bank, actions in INSTRUCTIONS.items() if action in actions and actions[action]]
+
+def _get_visible_banks(action: str):
+    banks = _banks_from_instructions(action)
+    try:
+        cursor.execute("SELECT bank, show_register, show_change FROM bank_visibility")
+        rows = cursor.fetchall()
+        vis = {b: (sr, sc) for b, sr, sc in rows}
+    except Exception:
+        vis = {}
+    result = []
+    for bank in banks:
+        sr, sc = vis.get(bank, (1, 1))
+        if action == "register" and sr:
+            result.append(bank)
+        if action == "change" and sc:
+            result.append(bank)
+    return result
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -49,11 +69,12 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data in ("type_register", "type_change"):
         action = "register" if data == "type_register" else "change"
-        banks = BANKS_REGISTER if action == "register" else BANKS_CHANGE
+        banks = _get_visible_banks(action)
         keyboard = [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_{action}")] for bank in banks]
         keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_banks")])
         if not banks:
-            await query.edit_message_text("Наразі записи для цього типу відсутні. Спробуйте пізніше.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="menu_banks")]]))
+            await query.edit_message_text("Наразі записи для цього типу відсутні. Спробуйте пізніше.",
+                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="menu_banks")]]))
             return
         await query.edit_message_text("Оберіть банк:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -92,8 +113,10 @@ async def age_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if data == "age_confirm_no":
-        keyboard = [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_register")] for bank in BANKS_REGISTER] + \
-                   [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_change")] for bank in BANKS_CHANGE]
+        reg_banks = _get_visible_banks("register")
+        chg_banks = _get_visible_banks("change")
+        keyboard = [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_register")] for bank in reg_banks] + \
+                   [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_change")] for bank in chg_banks]
         keyboard.append([InlineKeyboardButton("Назад", callback_data="back_to_main")])
         await query.edit_message_text("Ви не відповідаєте віковим вимогам. Будь ласка, оберіть інший банк.", reply_markup=InlineKeyboardMarkup(keyboard))
         user_states.pop(user_id, None)
