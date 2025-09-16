@@ -304,6 +304,14 @@ def ensure_schema():
             "is_admin_group": "ALTER TABLE manager_groups ADD COLUMN is_admin_group INTEGER DEFAULT 0"
         }
     )
+    # Migrations for banks table
+    _ensure_columns("banks",
+                    ["price", "description"],
+        {
+            "price": "ALTER TABLE banks ADD COLUMN price TEXT",
+            "description": "ALTER TABLE banks ADD COLUMN description TEXT"
+        }
+    )
     _ensure_indexes()
 
 ensure_schema()
@@ -406,18 +414,18 @@ def create_order_form(order_id: int, form_data: dict):
     except Exception as e:
         logger.warning("create_order_form failed: %s", e)
 
-def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True) -> bool:
+def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, price: str = None, description: str = None) -> bool:
     """Add a new bank"""
     try:
-        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled) VALUES (?,?,?)",
-                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0))
+        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled, price, description) VALUES (?,?,?,?,?)",
+                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description))
         conn.commit()
         return True
     except Exception as e:
         logger.warning("add_bank failed: %s", e)
         return False
 
-def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None) -> bool:
+def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None, price: str = None, description: str = None) -> bool:
     """Update bank settings"""
     try:
         updates = []
@@ -431,6 +439,12 @@ def update_bank(name: str, register_enabled: bool = None, change_enabled: bool =
         if is_active is not None:
             updates.append("is_active=?")
             params.append(1 if is_active else 0)
+        if price is not None:
+            updates.append("price=?")
+            params.append(price)
+        if description is not None:
+            updates.append("description=?")
+            params.append(description)
 
         if updates:
             params.append(name)
@@ -473,7 +487,7 @@ def add_bank_instruction(bank_name: str, action: str, step_number: int,
 
 def get_banks():
     """Get all banks"""
-    cursor.execute("SELECT name, is_active, register_enabled, change_enabled FROM banks ORDER BY name")
+    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description FROM banks ORDER BY name")
     return cursor.fetchall()
 
 def get_bank_instructions(bank_name: str, action: str = None):

@@ -90,11 +90,15 @@ def main():
     # Bank management conversation
     from handlers.bank_management import (
         BANK_NAME_INPUT,
+        BANK_PRICE_INPUT,
+        BANK_DESCRIPTION_INPUT,
         BANK_SETTINGS_INPUT,
         add_admin_group_handler,
         add_bank_group_handler,
         add_bank_handler,
         bank_name_input_handler,
+        bank_price_input_handler,
+        bank_description_input_handler,
         bank_settings_handler,
         banks_management_menu,
         cancel_conversation,
@@ -117,6 +121,14 @@ def main():
         entry_points=[CallbackQueryHandler(add_bank_handler, pattern="^banks_add$")],
         states={
             BANK_NAME_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bank_name_input_handler)],
+            BANK_PRICE_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bank_price_input_handler),
+                CallbackQueryHandler(bank_price_input_handler, pattern="^skip_price$")
+            ],
+            BANK_DESCRIPTION_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bank_description_input_handler),
+                CallbackQueryHandler(bank_description_input_handler, pattern="^skip_description$")
+            ],
             BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_reg_|bank_change_|bank_save).*$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
