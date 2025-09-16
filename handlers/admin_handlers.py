@@ -1,13 +1,15 @@
 import os
+
 from telegram import Update
 from telegram.ext import ContextTypes
-from db import cursor, conn, ADMIN_ID, logger
+
+from db import ADMIN_ID, conn, cursor, is_admin, logger
 from handlers.photo_handlers import (
-    free_group_db_by_chatid,
     assign_queued_clients_to_free_groups,
+    free_group_db_by_chatid,
 )
+from handlers.templates_store import del_template, list_templates, set_template
 from states import user_states
-from handlers.templates_store import list_templates, set_template, del_template
 
 ADMINS_FILE = "admins.txt"
 
@@ -24,9 +26,6 @@ def save_admins(admins):
     with open(ADMINS_FILE, "w") as f:
         for admin_id in admins:
             f.write(str(admin_id) + "\n")
-
-def is_admin(user_id):
-    return user_id in load_admins()
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.message.from_user.id):
@@ -433,7 +432,7 @@ async def banks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bank_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    from db import cursor, conn
+    from db import conn, cursor
     bank, scope = _parse_bank_and_scope(context.args)
     if not bank:
         return await update.message.reply_text("Використання: /bank_show <bank name> [register|change|both]")
@@ -448,7 +447,7 @@ async def bank_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bank_hide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    from db import cursor, conn
+    from db import conn, cursor
     bank, scope = _parse_bank_and_scope(context.args)
     if not bank:
         return await update.message.reply_text("Використання: /bank_hide <bank name> [register|change|both]")
@@ -466,7 +465,7 @@ async def bank_management_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Start bank management interface"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     from handlers.bank_management import banks_management_menu
     await banks_management_menu(update, context)
 
@@ -474,13 +473,13 @@ async def add_bank_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Quick add bank command"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     if not context.args:
         return await update.message.reply_text("Використання: /add_bank <назва банку>")
-    
+
     bank_name = " ".join(context.args).strip()
     from db import add_bank, log_action
-    
+
     if add_bank(bank_name, True, True):
         log_action(0, f"admin_{update.effective_user.id}", "add_bank_quick", bank_name)
         await update.message.reply_text(f"✅ Банк '{bank_name}' успішно додано!")
@@ -491,23 +490,23 @@ async def add_bank_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Add bank-specific manager group"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     if len(context.args) < 3:
         return await update.message.reply_text("Використання: /add_bank_group <group_id> <bank> <назва>")
-    
+
     try:
         group_id = int(context.args[0])
         bank = context.args[1]
         name = " ".join(context.args[2:])
-        
+
         from db import add_manager_group, log_action
-        
+
         if add_manager_group(group_id, name, bank, False):
             log_action(0, f"admin_{update.effective_user.id}", "add_bank_group", f"{bank}:{group_id}:{name}")
             await update.message.reply_text(f"✅ Групу '{name}' для банку '{bank}' додано!")
         else:
             await update.message.reply_text("❌ Помилка при додаванні групи (можливо, вже існує)")
-            
+
     except ValueError:
         await update.message.reply_text("❌ Group ID має бути числом")
 
@@ -515,22 +514,22 @@ async def add_admin_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Add admin manager group"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     if len(context.args) < 2:
         return await update.message.reply_text("Використання: /add_admin_group <group_id> <назва>")
-    
+
     try:
         group_id = int(context.args[0])
         name = " ".join(context.args[1:])
-        
+
         from db import add_manager_group, log_action
-        
+
         if add_manager_group(group_id, name, None, True):
             log_action(0, f"admin_{update.effective_user.id}", "add_admin_group", f"{group_id}:{name}")
             await update.message.reply_text(f"✅ Адмін групу '{name}' додано!")
         else:
             await update.message.reply_text("❌ Помилка при додаванні групи (можливо, вже існує)")
-            
+
     except ValueError:
         await update.message.reply_text("❌ Group ID має бути числом")
 
@@ -538,10 +537,10 @@ async def data_history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show data usage history for a bank"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     if not context.args:
         return await update.message.reply_text("Використання: /data_history <назва банку>")
-    
+
     bank = " ".join(context.args).strip()
     from handlers.data_validation import show_data_usage_history
     await show_data_usage_history(update, context, bank)
@@ -550,10 +549,10 @@ async def order_form_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show order form/questionnaire"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     if not context.args:
         return await update.message.reply_text("Використання: /order_form <order_id>")
-    
+
     try:
         order_id = int(context.args[0])
         from handlers.order_forms import get_order_form
@@ -565,7 +564,7 @@ async def list_forms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List order forms"""
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Немає доступу")
-    
+
     bank = " ".join(context.args).strip() if context.args else None
     from handlers.order_forms import list_order_forms
     await list_order_forms(update, context, bank)

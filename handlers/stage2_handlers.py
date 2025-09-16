@@ -2,16 +2,16 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-from db import cursor, conn, ADMIN_GROUP_ID, log_action, logger
+from db import ADMIN_GROUP_ID, conn, cursor, log_action, logger
+from handlers.templates_store import get_template
 from states import (
-    STAGE2_MANAGER_WAIT_DATA,
     STAGE2_MANAGER_WAIT_CODE,
+    STAGE2_MANAGER_WAIT_DATA,
     STAGE2_MANAGER_WAIT_MSG,
 )
-from handlers.templates_store import get_template
 
 PHONE_RE = re.compile(r"^\+?\d{9,15}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -615,7 +615,7 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
     uniqueness_confirmed = await check_and_confirm_data_uniqueness(
         update, context, order_id, bank, p, e
     )
-    
+
     if not uniqueness_confirmed:
         # Data needs confirmation, conversation will continue via callback
         return ConversationHandler.END
@@ -734,13 +734,13 @@ async def set_current_order_cmd(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await msg.reply_text("Використання: /o <order_id>")
         return
-    
+
     try:
         order_id = int(context.args[0])
     except Exception:
         await msg.reply_text("order_id має бути числом.")
         return
-    
+
     # Use enhanced order switching
     from handlers.multi_order_management import quick_switch_order
     await quick_switch_order(update, context, order_id)
