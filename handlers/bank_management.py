@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from db import (
     add_bank,
+    add_manager_group,
     delete_bank,
     get_bank_groups,
     get_banks,
@@ -421,7 +422,7 @@ async def confirm_delete_bank_handler(update: Update, context: ContextTypes.DEFA
     text += "Підтвердіть дію:"
 
     keyboard = [
-        [InlineKeyboardButton("✅ Так, видалити", callback_data=f"confirm_delete_{bank_name}")],
+        [InlineKeyboardButton("✅ Так, видалити", callback_data=f"confirm_delete_bank_{bank_name}")],
         [InlineKeyboardButton("❌ Скасувати", callback_data="banks_delete")]
     ]
 
@@ -436,13 +437,205 @@ async def final_delete_bank_handler(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
 
     # Extract bank name from callback data
-    bank_name = query.data.replace("confirm_delete_", "")
+    bank_name = query.data.replace("confirm_delete_bank_", "")
 
     if delete_bank(bank_name):
         text = f"✅ Банк '{bank_name}' та всі його інструкції успішно видалено"
         log_action(0, f"admin_{update.effective_user.id}", "delete_bank", bank_name)
     else:
         text = f"❌ Помилка при видаленні банку '{bank_name}'"
+
+    await query.edit_message_text(text)
+
+async def add_bank_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add bank group handler - show list of banks to select"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    banks = get_banks()
+
+    if not banks:
+        text = "➕ <b>Додати групу для банку</b>\n\n❌ Немає зареєстрованих банків.\nСпочатку додайте банк."
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")]]
+    else:
+        text = "➕ <b>Додати групу для банку</b>\n\nОберіть банк для якого додати групу:"
+        keyboard = []
+        for name, is_active, _, _ in banks:
+            if is_active:  # Only show active banks
+                keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"select_bank_for_group_{name}")])
+        
+        if not any(is_active for _, is_active, _, _ in banks):
+            text = "➕ <b>Додати групу для банку</b>\n\n❌ Немає активних банків.\nСпочатку активуйте хоча б один банк."
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def add_admin_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add admin group handler"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    text = "👨‍💼 <b>Додати адмін групу</b>\n\n"
+    text += "Для додавання адмін групи використовуйте команду:\n"
+    text += "<code>/add_admin_group &lt;group_id&gt; &lt;назва&gt;</code>\n\n"
+    text += "<b>Приклад:</b>\n"
+    text += "<code>/add_admin_group -1001234567890 Адміністрація</code>\n\n"
+    text += "Де:\n"
+    text += "• <code>group_id</code> - ID групи (отримати можна переслав повідомлення з групи в @userinfobot)\n"
+    text += "• <code>назва</code> - читабельна назва групи"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def select_bank_for_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle bank selection for group creation"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract bank name from callback data
+    bank_name = query.data.replace("select_bank_for_group_", "")
+
+    text = f"➕ <b>Додати групу для банку '{bank_name}'</b>\n\n"
+    text += "Для додавання групи банку використовуйте команду:\n"
+    text += f"<code>/add_bank_group &lt;group_id&gt; {bank_name} &lt;назва&gt;</code>\n\n"
+    text += "<b>Приклад:</b>\n"
+    text += f"<code>/add_bank_group -1001234567890 {bank_name} Менеджери {bank_name}</code>\n\n"
+    text += "Де:\n"
+    text += "• <code>group_id</code> - ID групи (отримати можна переслав повідомлення з групи в @userinfobot)\n"
+    text += f"• <code>{bank_name}</code> - назва банку (вже вказана)\n"
+    text += "• <code>назва</code> - читабельна назва групи"
+
+    keyboard = [
+        [InlineKeyboardButton("🔙 Обрати інший банк", callback_data="groups_add_bank")],
+        [InlineKeyboardButton("🏠 До групи", callback_data="groups_menu")]
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def delete_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete group handler - show list of groups to delete"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Import here to avoid circular imports
+    from db import cursor
+
+    # Get all groups
+    cursor.execute("SELECT group_id, name, bank, is_admin_group FROM manager_groups ORDER BY name ASC")
+    groups = cursor.fetchall()
+
+    if not groups:
+        text = "🗑️ <b>Видалити групу</b>\n\n❌ Немає зареєстрованих груп для видалення"
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")]]
+    else:
+        text = "🗑️ <b>Видалити групу</b>\n\n⚠️ <b>Увага!</b> Видалення групи призведе до втрати всіх налаштувань.\n\nОберіть групу для видалення:"
+        keyboard = []
+        for group_id, name, bank, is_admin_group in groups:
+            if is_admin_group:
+                display_name = f"👨‍💼 {name} (ID: {group_id})"
+            else:
+                display_name = f"🏦 {name} - {bank} (ID: {group_id})"
+            keyboard.append([InlineKeyboardButton(f"🗑️ {display_name}", callback_data=f"delete_group_{group_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def confirm_delete_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle group deletion confirmation"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract group ID from callback data
+    group_id = int(query.data.replace("delete_group_", ""))
+
+    # Import here to avoid circular imports
+    from db import cursor
+
+    # Get group info
+    cursor.execute("SELECT name, bank, is_admin_group FROM manager_groups WHERE group_id=?", (group_id,))
+    group_info = cursor.fetchone()
+
+    if not group_info:
+        await query.edit_message_text("❌ Групу не знайдено")
+        return
+
+    name, bank, is_admin_group = group_info
+    
+    if is_admin_group:
+        group_type = "адмін групу"
+        group_desc = f"'{name}'"
+    else:
+        group_type = "групу банку"
+        group_desc = f"'{name}' для банку '{bank}'"
+
+    text = f"🗑️ <b>Видалення групи</b>\n\n"
+    text += f"⚠️ <b>Увага!</b> Ви дійсно хочете видалити {group_type} {group_desc}?\n\n"
+    text += f"ID групи: <code>{group_id}</code>\n\n"
+    text += "Це призведе до:\n"
+    text += "• Видалення групи з системи\n"
+    text += "• Втрати всіх налаштувань групи\n"
+    text += "• Неможливості відновлення\n\n"
+    text += "Підтвердіть дію:"
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Так, видалити", callback_data=f"confirm_delete_group_{group_id}")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="groups_delete")]
+    ]
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def final_delete_group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Final group deletion handler"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract group ID from callback data
+    group_id = int(query.data.replace("confirm_delete_group_", ""))
+
+    # Import here to avoid circular imports
+    from db import conn, cursor
+
+    # Get group info before deletion
+    cursor.execute("SELECT name, bank, is_admin_group FROM manager_groups WHERE group_id=?", (group_id,))
+    group_info = cursor.fetchone()
+
+    if not group_info:
+        await query.edit_message_text("❌ Групу не знайдено")
+        return
+
+    name, bank, is_admin_group = group_info
+
+    try:
+        cursor.execute("DELETE FROM manager_groups WHERE group_id=?", (group_id,))
+        conn.commit()
+        
+        if is_admin_group:
+            text = f"✅ Адмін групу '{name}' (ID: {group_id}) успішно видалено"
+            log_action(0, f"admin_{update.effective_user.id}", "delete_admin_group", f"{group_id}:{name}")
+        else:
+            text = f"✅ Групу '{name}' для банку '{bank}' (ID: {group_id}) успішно видалено"
+            log_action(0, f"admin_{update.effective_user.id}", "delete_bank_group", f"{bank}:{group_id}:{name}")
+            
+    except Exception as e:
+        text = f"❌ Помилка при видаленні групи: {e}"
 
     await query.edit_message_text(text)
 
