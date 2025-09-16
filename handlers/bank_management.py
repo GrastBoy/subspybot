@@ -24,7 +24,11 @@ GROUP_BANK_SELECT, GROUP_NAME_INPUT = range(6, 8)
 async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main banks management menu"""
     if not is_admin(update.effective_user.id):
-        return await update.message.reply_text("⛔ Немає доступу")
+        # Handle both message and callback query contexts
+        if update.callback_query:
+            return await update.callback_query.answer("⛔ Немає доступу", show_alert=True)
+        else:
+            return await update.message.reply_text("⛔ Немає доступу")
 
     keyboard = [
         [InlineKeyboardButton("📋 Список банків", callback_data="banks_list")],
@@ -36,7 +40,13 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
     ]
 
     text = "🏦 <b>Управління банками</b>\n\nОберіть дію:"
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    
+    # Handle both message and callback query contexts
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all banks with their settings"""
