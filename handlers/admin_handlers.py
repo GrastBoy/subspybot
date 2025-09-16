@@ -3,7 +3,7 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import ADMIN_ID, conn, cursor, logger
+from db import ADMIN_ID, conn, cursor, logger, is_admin
 from handlers.photo_handlers import (
     assign_queued_clients_to_free_groups,
     free_group_db_by_chatid,
@@ -26,9 +26,6 @@ def save_admins(admins):
     with open(ADMINS_FILE, "w") as f:
         for admin_id in admins:
             f.write(str(admin_id) + "\n")
-
-def is_admin(user_id):
-    return user_id in load_admins()
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.message.from_user.id):
