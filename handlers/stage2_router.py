@@ -1,18 +1,16 @@
 from telegram.ext import CallbackQueryHandler, ConversationHandler, MessageHandler, filters
-from handlers.stage2_handlers import (
-    user_stage2_callback,
-    manager_stage2_callback,
-    manager_enter_data,
-    manager_enter_code,
-    manager_enter_message,
-    stage2_group_text
-)
-from states import (
-    STAGE2_MANAGER_WAIT_DATA,
-    STAGE2_MANAGER_WAIT_CODE,
-    STAGE2_MANAGER_WAIT_MSG
-)
+
 from db import ADMIN_GROUP_ID
+from handlers.stage2_handlers import (
+    manager_enter_code,
+    manager_enter_data,
+    manager_enter_message,
+    manager_stage2_callback,
+    stage2_group_text,
+    user_stage2_callback,
+)
+from states import STAGE2_MANAGER_WAIT_CODE, STAGE2_MANAGER_WAIT_DATA, STAGE2_MANAGER_WAIT_MSG
+
 
 def build_stage2_handlers():
     """

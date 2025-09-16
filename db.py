@@ -1,11 +1,13 @@
-import os
-import sys
-import sqlite3
-import logging
 import atexit
+import logging
+import os
 import signal
+import sqlite3
+import sys
 from typing import Iterable
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -322,17 +324,17 @@ def check_data_uniqueness(bank: str, phone_number: str = None, email: str = None
     """Check if phone/email were used for this bank before. Returns (phone_used, email_used)"""
     phone_used = False
     email_used = False
-    
+
     if phone_number:
-        cursor.execute("SELECT COUNT(*) FROM bank_data_usage WHERE bank=? AND phone_number=?", 
+        cursor.execute("SELECT COUNT(*) FROM bank_data_usage WHERE bank=? AND phone_number=?",
                       (bank, phone_number))
         phone_used = cursor.fetchone()[0] > 0
-    
+
     if email:
-        cursor.execute("SELECT COUNT(*) FROM bank_data_usage WHERE bank=? AND email=?", 
+        cursor.execute("SELECT COUNT(*) FROM bank_data_usage WHERE bank=? AND email=?",
                       (bank, email))
         email_used = cursor.fetchone()[0] > 0
-    
+
     return phone_used, email_used
 
 def record_data_usage(order_id: int, bank: str, phone_number: str = None, email: str = None):
@@ -369,9 +371,9 @@ def set_active_order_for_group(group_id: int, order_id: int, is_primary: bool = 
         if is_primary:
             # Clear other primary orders for this group
             cursor.execute("UPDATE manager_active_orders SET is_primary=0 WHERE group_id=?", (group_id,))
-        
+
         # Check if this order is already active for this group
-        cursor.execute("SELECT id FROM manager_active_orders WHERE group_id=? AND order_id=?", 
+        cursor.execute("SELECT id FROM manager_active_orders WHERE group_id=? AND order_id=?",
                       (group_id, order_id))
         if cursor.fetchone():
             cursor.execute("UPDATE manager_active_orders SET is_primary=? WHERE group_id=? AND order_id=?",
@@ -429,7 +431,7 @@ def update_bank(name: str, register_enabled: bool = None, change_enabled: bool =
         if is_active is not None:
             updates.append("is_active=?")
             params.append(1 if is_active else 0)
-        
+
         if updates:
             params.append(name)
             cursor.execute(f"UPDATE banks SET {','.join(updates)} WHERE name=?", params)
@@ -451,7 +453,7 @@ def delete_bank(name: str) -> bool:
         logger.warning("delete_bank failed: %s", e)
         return False
 
-def add_bank_instruction(bank_name: str, action: str, step_number: int, 
+def add_bank_instruction(bank_name: str, action: str, step_number: int,
                         instruction_text: str = None, instruction_images: list = None,
                         age_requirement: int = None, required_photos: int = None) -> bool:
     """Add bank instruction"""
@@ -459,7 +461,7 @@ def add_bank_instruction(bank_name: str, action: str, step_number: int,
     try:
         images_json = json.dumps(instruction_images or [])
         cursor.execute("""
-            INSERT INTO bank_instructions 
+            INSERT INTO bank_instructions
             (bank_name, action, step_number, instruction_text, instruction_images, age_requirement, required_photos)
             VALUES (?,?,?,?,?,?,?)
         """, (bank_name, action, step_number, instruction_text, images_json, age_requirement, required_photos))

@@ -1,12 +1,12 @@
-import os
 import asyncio
-from typing import List, Tuple, Optional
+import os
+from typing import List, Optional, Tuple
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-from db import cursor, conn, ADMIN_GROUP_ID, logger
-from states import user_states, find_age_requirement, REJECT_REASON, MANAGER_MESSAGE, get_required_photos, INSTRUCTIONS
+from db import ADMIN_GROUP_ID, conn, cursor, logger
+from states import INSTRUCTIONS, MANAGER_MESSAGE, REJECT_REASON, find_age_requirement, get_required_photos, user_states
 
 # Debounce/aggregation for photo albums and series
 DEBOUNCE_SECONDS = 1.8
@@ -564,27 +564,27 @@ async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank
                                 context: ContextTypes.DEFAULT_TYPE) -> bool:
     # First try to find bank-specific groups
     cursor.execute("""
-        SELECT id, group_id, name FROM manager_groups 
-        WHERE busy=0 AND (bank=? OR is_admin_group=1) 
-        ORDER BY CASE WHEN bank=? THEN 0 ELSE 1 END, id ASC 
+        SELECT id, group_id, name FROM manager_groups
+        WHERE busy=0 AND (bank=? OR is_admin_group=1)
+        ORDER BY CASE WHEN bank=? THEN 0 ELSE 1 END, id ASC
         LIMIT 1
     """, (bank, bank))
     free_group = cursor.fetchone()
-    
+
     if free_group:
         group_db_id, group_chat_id, group_name = free_group
         try:
             occupy_group_db_by_dbid(group_db_id)
             set_order_group_db(order_id, group_chat_id)
             logger.info("Order %s assigned to group %s (%s)", order_id, group_chat_id, group_name)
-            
+
             # Auto-add to active orders for this group
             try:
                 from handlers.multi_order_management import auto_add_new_order_to_active
                 await auto_add_new_order_to_active(context, order_id, group_chat_id)
             except Exception as e:
                 logger.warning("Failed to auto-add order to active list: %s", e)
-            
+
             msg = f"📢 Нова заявка від @{username} (ID: {user_id})\n🏦 {bank} — {action}\nOrderID: {order_id}"
             try:
                 await context.bot.send_message(chat_id=group_chat_id, text=msg)
@@ -696,14 +696,14 @@ async def send_instruction(user_id: int, context, order_id: int = None):
             await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=f"✅ Замовлення {order_id} виконано.")
         except Exception:
             pass
-        
+
         # Generate order form/questionnaire
         try:
             from handlers.order_forms import generate_order_form
             await generate_order_form(None, context, order_id)
         except Exception as e:
             logger.warning(f"Failed to generate order form for order {order_id}: {e}")
-        
+
         user_states.pop(user_id, None)
         return
 
