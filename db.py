@@ -287,6 +287,13 @@ def ensure_schema():
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # admins table for unified admin authorization
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS admins (
+        user_id INTEGER PRIMARY KEY,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
     # Migrations (ensure missing columns if old DB)
     _ensure_columns("orders",
                     [
@@ -336,7 +343,76 @@ def log_action(order_id: int, actor: str, action_type: str, payload: str = None)
         logger.warning("log_action failed: %s", e)
 
 def is_admin(user_id: int) -> bool:
+    """Check if user is admin by checking the database (with env fallback for safety)"""
+    try:
+        cursor.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
+        if cursor.fetchone():
+            return True
+    except Exception as e:
+        logger.warning("Admin DB lookup failed: %s", e)
+    
+    # Fallback to environment for safety during migration
     return user_id in ADMIN_IDS
+
+def add_admin_db(user_id: int) -> bool:
+    """Add admin to database. Returns True if added, False if already exists."""
+    try:
+        cursor.execute("INSERT INTO admins (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        logger.info("Added admin to DB: %s", user_id)
+        return True
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            return False  # Already exists
+        logger.warning("add_admin_db failed: %s", e)
+        return False
+
+def remove_admin_db(user_id: int) -> bool:
+    """Remove admin from database. Returns True if removed, False if not found."""
+    try:
+        cursor.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
+        removed = cursor.rowcount > 0
+        conn.commit()
+        if removed:
+            logger.info("Removed admin from DB: %s", user_id)
+        return removed
+    except Exception as e:
+        logger.warning("remove_admin_db failed: %s", e)
+        return False
+
+def list_admins_db() -> list[int]:
+    """Get list of all admin user IDs from database."""
+    try:
+        cursor.execute("SELECT user_id FROM admins ORDER BY user_id")
+        return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.warning("list_admins_db failed: %s", e)
+        return []
+
+def seed_admins_from_env():
+    """Seed admins table from ADMIN_IDS environment variable if table is empty or missing IDs."""
+    try:
+        if not ADMIN_IDS:
+            logger.info("No ADMIN_IDS in environment, skipping admin seeding")
+            return
+            
+        # Get current admins from DB
+        current_admins = set(list_admins_db())
+        
+        # Add any missing admins from environment
+        added_count = 0
+        for admin_id in ADMIN_IDS:
+            if admin_id not in current_admins:
+                if add_admin_db(admin_id):
+                    added_count += 1
+                    
+        if added_count > 0:
+            logger.info("Seeded %d admins from environment to database", added_count)
+        else:
+            logger.info("All environment admins already in database")
+            
+    except Exception as e:
+        logger.warning("seed_admins_from_env failed: %s", e)
 
 # New utility functions for enhanced functionality
 def check_data_uniqueness(bank: str, phone_number: str = None, email: str = None) -> tuple:
@@ -657,3 +733,6 @@ logger.info(
 )
 if not BOT_TOKEN or BOT_TOKEN.strip() == "":
     logger.error("BOT_TOKEN is not set. Please set the BOT_TOKEN environment variable.")
+
+# Seed admins from environment after all functions are defined
+seed_admins_from_env()

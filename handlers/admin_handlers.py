@@ -3,29 +3,13 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import ADMIN_ID, conn, cursor, is_admin, logger
+from db import ADMIN_ID, conn, cursor, is_admin, logger, add_admin_db, remove_admin_db, list_admins_db
 from handlers.photo_handlers import (
     assign_queued_clients_to_free_groups,
     free_group_db_by_chatid,
 )
 from handlers.templates_store import del_template, list_templates, set_template
 from states import user_states
-
-ADMINS_FILE = "admins.txt"
-
-def load_admins():
-    """Зчитати список адмінів з файлу"""
-    if not os.path.exists(ADMINS_FILE):
-        with open(ADMINS_FILE, "w") as f:
-            f.write(str(ADMIN_ID) + "\n")
-    with open(ADMINS_FILE, "r") as f:
-        return set(int(line.strip()) for line in f if line.strip().isdigit())
-
-def save_admins(admins):
-    """Зберегти список адмінів у файл"""
-    with open(ADMINS_FILE, "w") as f:
-        for admin_id in admins:
-            f.write(str(admin_id) + "\n")
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.message.from_user.id):
@@ -137,14 +121,10 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Некоректний user_id.")
         return
 
-    admins = load_admins()
-    if new_admin_id in admins:
+    if add_admin_db(new_admin_id):
+        await update.message.reply_text(f"✅ Додано нового адміна: {new_admin_id}")
+    else:
         await update.message.reply_text("ℹ️ Користувач вже є адміном.")
-        return
-
-    admins.add(new_admin_id)
-    save_admins(admins)
-    await update.message.reply_text(f"✅ Додано нового адміна: {new_admin_id}")
 
 async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -162,14 +142,10 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Некоректний user_id.")
         return
 
-    admins = load_admins()
-    if remove_admin_id not in admins:
+    if remove_admin_db(remove_admin_id):
+        await update.message.reply_text(f"✅ Видалено адміна: {remove_admin_id}")
+    else:
         await update.message.reply_text("❌ Користувач не є адміном.")
-        return
-
-    admins.remove(remove_admin_id)
-    save_admins(admins)
-    await update.message.reply_text(f"✅ Видалено адміна: {remove_admin_id}")
 
 async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -177,8 +153,11 @@ async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ тільки для адміністратора.")
         return
 
-    admins = load_admins()
-    msg = "🛡️ Список адміністраторів:\n" + "\n".join(str(a) for a in admins)
+    admins = list_admins_db()
+    if admins:
+        msg = "🛡️ Список адміністраторів:\n" + "\n".join(str(a) for a in admins)
+    else:
+        msg = "🛡️ Список адміністраторів порожній"
     await update.message.reply_text(msg)
 
 async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
