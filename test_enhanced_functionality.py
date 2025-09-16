@@ -203,17 +203,17 @@ def test_edge_cases():
 def test_admin_interface():
     """Test unified admin interface functionality"""
     print("🔧 Testing unified admin interface...")
-    
+
     try:
-        from handlers.admin_interface import admin_interface_menu, admin_interface_callback
+        from handlers.admin_interface import admin_interface_callback, admin_interface_menu
         print("✅ Admin interface modules imported successfully")
-        
+
         # Test that interface has proper structure
         assert admin_interface_menu.__doc__ is not None, "admin_interface_menu should have documentation"
         assert admin_interface_callback.__doc__ is not None, "admin_interface_callback should have documentation"
-        
+
         print("✅ Admin interface structure tests passed")
-        
+
     except Exception as e:
         print(f"❌ Admin interface test failed: {e}")
         raise
