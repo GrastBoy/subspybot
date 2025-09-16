@@ -1,8 +1,7 @@
-[tool.ruff]
 line-length = 120
 target-version = "py38"
 
-[tool.ruff.lint]
+[lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -12,10 +11,9 @@ select = [
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
-    "W503",  # line break before binary operator
 ]
 
-[tool.ruff.format]
+[format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
