@@ -251,7 +251,7 @@ def main():
     from handlers.admin_interface import admin_interface_callback, admin_interface_menu
     app.add_handler(CommandHandler("admin", admin_interface_menu))
     app.add_handler(CallbackQueryHandler(admin_interface_callback,
-                                        pattern="^(admin_|back_to_admin|groups_|orders_|admins_|stats_|system_|templates_).*$"))
+                                        pattern="^(admin_|back_to_admin|groups_menu|groups_|orders_|admins_|stats_|system_|templates_).*$"))
 
     logger.info("Бот запущений...")
     app.run_polling()
