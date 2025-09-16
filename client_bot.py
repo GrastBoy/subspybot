@@ -39,6 +39,7 @@ from handlers.admin_handlers import (
 )
 from handlers.cooperation_handlers import cancel, cooperation_receive, cooperation_start_handler
 from handlers.menu_handlers import age_confirm_handler, main_menu_handler, start
+from handlers.order_handlers import myorders
 from handlers.photo_handlers import handle_admin_action, handle_photos, manager_message_handler, reject_reason_handler
 from handlers.stage2_handlers import set_current_order_cmd, stage2_user_text
 from handlers.stage2_router import build_stage2_handlers
@@ -205,6 +206,8 @@ def main():
 
     # Group quick switch current order: /o <id>
     app.add_handler(CommandHandler("order", set_current_order_cmd))
+    app.add_handler(CommandHandler("o", set_current_order_cmd))  # Short alias for order command
+    app.add_handler(CommandHandler("myorders", myorders))
 
     # User -> managers autobridge (private text)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, stage2_user_text))

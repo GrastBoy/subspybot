@@ -48,8 +48,12 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-    else:
+    elif update.message:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    else:
+        # Fallback for edge cases where neither callback_query nor message is available
+        logger.warning("banks_management_menu called without valid update.callback_query or update.message")
+        return
 
 async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all banks with their settings"""
