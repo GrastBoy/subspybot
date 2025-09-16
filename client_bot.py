@@ -19,8 +19,9 @@ from handlers.status_handler import status
 from handlers.stage2_router import build_stage2_handlers
 from handlers.stage2_handlers import stage2_user_text, set_current_order_cmd
 
+
 def main():
-    if BOT_TOKEN in ("", "CHANGE_ME_PLEASE"):
+    if BOT_TOKEN in (""):
         print("ERROR: BOT_TOKEN не встановлено. Задайте змінну середовища BOT_TOKEN.")
         return
 
