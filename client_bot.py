@@ -90,15 +90,27 @@ def main():
     from handlers.bank_management import (
         BANK_NAME_INPUT,
         BANK_SETTINGS_INPUT,
+        add_admin_group_handler,
+        add_bank_group_handler,
         add_bank_handler,
         bank_name_input_handler,
         bank_settings_handler,
         banks_management_menu,
         cancel_conversation,
+        confirm_delete_bank_handler,
+        confirm_delete_group_handler,
+        delete_bank_handler,
+        delete_group_handler,
+        edit_bank_handler,
+        edit_bank_settings_handler,
+        final_delete_bank_handler,
+        final_delete_group_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
         list_groups_handler,
+        select_bank_for_group_handler,
+        toggle_bank_setting_handler,
     )
     conv_bank_management = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_bank_handler, pattern="^banks_add$")],
@@ -114,9 +126,21 @@ def main():
     # Bank management callback handlers
     app.add_handler(CallbackQueryHandler(banks_management_menu, pattern="^banks_menu$"))
     app.add_handler(CallbackQueryHandler(list_banks_handler, pattern="^banks_list$"))
+    app.add_handler(CallbackQueryHandler(edit_bank_handler, pattern="^banks_edit$"))
+    app.add_handler(CallbackQueryHandler(delete_bank_handler, pattern="^banks_delete$"))
+    app.add_handler(CallbackQueryHandler(edit_bank_settings_handler, pattern="^edit_bank_.*$"))
+    app.add_handler(CallbackQueryHandler(toggle_bank_setting_handler, pattern="^toggle_(active|register|change)_.*$"))
+    app.add_handler(CallbackQueryHandler(confirm_delete_bank_handler, pattern="^delete_bank_.*$"))
+    app.add_handler(CallbackQueryHandler(final_delete_bank_handler, pattern="^confirm_delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
     app.add_handler(CallbackQueryHandler(groups_menu_handler, pattern="^groups_menu$"))
     app.add_handler(CallbackQueryHandler(list_groups_handler, pattern="^groups_list$"))
+    app.add_handler(CallbackQueryHandler(add_bank_group_handler, pattern="^groups_add_bank$"))
+    app.add_handler(CallbackQueryHandler(add_admin_group_handler, pattern="^groups_add_admin$"))
+    app.add_handler(CallbackQueryHandler(select_bank_for_group_handler, pattern="^select_bank_for_group_.*$"))
+    app.add_handler(CallbackQueryHandler(delete_group_handler, pattern="^groups_delete$"))
+    app.add_handler(CallbackQueryHandler(confirm_delete_group_handler, pattern="^delete_group_.*$"))
+    app.add_handler(CallbackQueryHandler(final_delete_group_handler, pattern="^confirm_delete_group_.*$"))
 
     # Instruction management conversation
     from handlers.instruction_management import (
