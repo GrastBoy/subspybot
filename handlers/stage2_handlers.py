@@ -489,7 +489,9 @@ async def stage2_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = msg.text.strip()
 
     # 0) Set current order by tag or reply
-    tag = ORDER_TAG_RE.search(text) or (ORDER_ID_IN_TEXT_RE.search(msg.reply_to_message.text) if msg.reply_to_message and msg.reply_to_message.text else None)
+    tag = ORDER_TAG_RE.search(text)
+    if not tag and msg.reply_to_message and msg.reply_to_message.text:
+        tag = ORDER_ID_IN_TEXT_RE.search(msg.reply_to_message.text)
     if tag:
         try:
             order_id = int(tag.group(1))
@@ -554,12 +556,12 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Спочатку натисніть 'Надати дані'.")
         return ConversationHandler.END
 
-    cursor.execute("SELECT user_id, stage2_status FROM orders WHERE id=?", (order_id,))
+    cursor.execute("SELECT user_id, stage2_status, bank FROM orders WHERE id=?", (order_id,))
     r = cursor.fetchone()
     if not r:
         await update.message.reply_text("❌ Замовлення не знайдено.")
         return ConversationHandler.END
-    user_id, stage2_status = r
+    user_id, stage2_status, bank = r
 
     if stage2_status not in ("waiting_manager_data", "idle"):
         if stage2_status == "data_received":
@@ -607,6 +609,16 @@ async def manager_enter_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=_manager_data_keyboard(order_id)
         )
         return STAGE2_MANAGER_WAIT_DATA
+
+    # Check data uniqueness before saving
+    from handlers.data_validation import check_and_confirm_data_uniqueness
+    uniqueness_confirmed = await check_and_confirm_data_uniqueness(
+        update, context, order_id, bank, p, e
+    )
+    
+    if not uniqueness_confirmed:
+        # Data needs confirmation, conversation will continue via callback
+        return ConversationHandler.END
 
     _update_order(order_id,
                   phone_number=p,
@@ -709,22 +721,26 @@ async def manager_enter_message(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop("stage2_msg_user_id", None)
     return ConversationHandler.END
 
-# ================== Quick command: /o <id> in groups ==================
+# ================== Enhanced quick command: /o <id> in groups ==================
 
 async def set_current_order_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced /o command with multi-order support"""
     msg = update.message
     if not msg or not context.args:
-        await msg.reply_text("Використання: /o <order_id>")
+        # Show usage and current active orders
+        if msg.chat.type != 'private':
+            from handlers.multi_order_management import show_active_orders
+            await show_active_orders(update, context)
+        else:
+            await msg.reply_text("Використання: /o <order_id>")
         return
+    
     try:
         order_id = int(context.args[0])
     except Exception:
         await msg.reply_text("order_id має бути числом.")
         return
-    cursor.execute("SELECT 1 FROM orders WHERE id=?", (order_id,))
-    if not cursor.fetchone():
-        await msg.reply_text("❌ Замовлення не знайдено.")
-        return
-    chat_id = msg.chat_id
-    _set_current_stage2_order(context, chat_id, order_id)
-    await msg.reply_text(f"✅ Поточне замовлення встановлено: Order {order_id}")
+    
+    # Use enhanced order switching
+    from handlers.multi_order_management import quick_switch_order
+    await quick_switch_order(update, context, order_id)
