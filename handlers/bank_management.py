@@ -12,6 +12,9 @@ from db import (
     delete_bank,
     get_bank_groups,
     get_banks,
+    get_bank_form_template,
+    set_bank_form_template,
+    delete_bank_form_template,
     is_admin,
     log_action,
     update_bank,
@@ -39,6 +42,7 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("✏️ Редагувати банк", callback_data="banks_edit")],
         [InlineKeyboardButton("🗑️ Видалити банк", callback_data="banks_delete")],
         [InlineKeyboardButton("📝 Управління інструкціями", callback_data="instructions_menu")],
+        [InlineKeyboardButton("📋 Шаблони анкет", callback_data="form_templates_menu")],
         [InlineKeyboardButton("👥 Управління групами", callback_data="groups_menu")]
     ]
 
@@ -483,6 +487,63 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
                 log_action(0, f"admin_{update.effective_user.id}", "toggle_bank_change", f"{bank_name}:{status}")
             else:
                 await query.edit_message_text(f"❌ Помилка при зміні налаштувань перев'язки для банку '{bank_name}'")
+    
+    elif data.startswith("edit_price_"):
+        bank_name = data.replace("edit_price_", "")
+        context.user_data['editing_bank'] = bank_name
+        context.user_data['editing_field'] = 'price'
+        
+        text = f"💰 <b>Зміна ціни для банку '{bank_name}'</b>\n\n"
+        text += "Введіть нову ціну банку (наприклад: '500 грн', '20$', 'безкоштовно'):"
+        
+        await query.edit_message_text(text, parse_mode='HTML')
+        # This would need a separate conversation handler or we can use a simpler approach
+        # For now, let's make it a simple text edit
+        
+    elif data.startswith("edit_description_"):
+        bank_name = data.replace("edit_description_", "")
+        context.user_data['editing_bank'] = bank_name
+        context.user_data['editing_field'] = 'description'
+        
+        text = f"📝 <b>Зміна опису для банку '{bank_name}'</b>\n\n"
+        text += "Введіть новий опис банку:"
+        
+        await query.edit_message_text(text, parse_mode='HTML')
+        # This would need a separate conversation handler or we can use a simpler approach
+
+async def update_bank_field_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle updating bank field via text message"""
+    if not update.message or not update.message.text:
+        return
+        
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+        
+    editing_bank = context.user_data.get('editing_bank')
+    editing_field = context.user_data.get('editing_field')
+    
+    if not editing_bank or not editing_field:
+        return
+        
+    new_value = update.message.text.strip()
+    
+    if editing_field == 'price':
+        if update_bank(editing_bank, price=new_value):
+            await update.message.reply_text(f"✅ Ціну банку '{editing_bank}' змінено на: {new_value}")
+            log_action(0, f"admin_{user_id}", "update_bank_price", f"{editing_bank}:{new_value}")
+        else:
+            await update.message.reply_text(f"❌ Помилка при зміні ціни банку '{editing_bank}'")
+    elif editing_field == 'description':
+        if update_bank(editing_bank, description=new_value):
+            await update.message.reply_text(f"✅ Опис банку '{editing_bank}' змінено на: {new_value}")
+            log_action(0, f"admin_{user_id}", "update_bank_description", f"{editing_bank}:{new_value}")
+        else:
+            await update.message.reply_text(f"❌ Помилка при зміні опису банку '{editing_bank}'")
+    
+    # Clear editing state
+    context.user_data.pop('editing_bank', None)
+    context.user_data.pop('editing_field', None)
 
 async def confirm_delete_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle bank deletion confirmation"""
@@ -720,6 +781,65 @@ async def final_delete_group_handler(update: Update, context: ContextTypes.DEFAU
         text = f"❌ Помилка при видаленні групи: {e}"
 
     await query.edit_message_text(text)
+
+async def form_templates_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Form templates management menu"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("📋 Переглянути шаблони", callback_data="form_templates_list")],
+        [InlineKeyboardButton("➕ Створити шаблон", callback_data="form_templates_create")],
+        [InlineKeyboardButton("✏️ Редагувати шаблон", callback_data="form_templates_edit")],
+        [InlineKeyboardButton("🗑️ Видалити шаблон", callback_data="form_templates_delete")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")]
+    ]
+
+    text = "📋 <b>Управління шаблонами анкет</b>\n\n"
+    text += "Тут ви можете керувати шаблонами анкет для банків:\n"
+    text += "• Переглянути існуючі шаблони\n"
+    text += "• Створити новий шаблон для банку\n"
+    text += "• Редагувати поля анкети\n"
+    text += "• Видаляти старі шаблони\n\n"
+    text += "Оберіть дію:"
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all form templates"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    from db import get_bank_form_template, get_banks
+
+    banks = get_banks()
+    
+    text = "📋 <b>Шаблони анкет банків</b>\n\n"
+    
+    if not banks:
+        text += "❌ Немає зареєстрованих банків"
+    else:
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
+            template = get_bank_form_template(name)
+            if template:
+                field_count = len(template.get('fields', []))
+                text += f"🏦 <b>{name}</b> - {field_count} полів\n"
+                for i, field in enumerate(template.get('fields', [])[:3], 1):  # Show first 3 fields
+                    text += f"   {i}. {field.get('name', 'Без назви')}\n"
+                if field_count > 3:
+                    text += f"   ... та ще {field_count - 3} полів\n"
+            else:
+                text += f"🏦 <b>{name}</b> - ❌ Немає шаблону\n"
+            text += "\n"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 # Utility function for handling conversation cancellation
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):

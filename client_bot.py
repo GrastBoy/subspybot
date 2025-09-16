@@ -110,6 +110,8 @@ def main():
         edit_bank_settings_handler,
         final_delete_bank_handler,
         final_delete_group_handler,
+        form_templates_menu_handler,
+        form_templates_list_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
@@ -142,7 +144,7 @@ def main():
     app.add_handler(CallbackQueryHandler(edit_bank_handler, pattern="^banks_edit$"))
     app.add_handler(CallbackQueryHandler(delete_bank_handler, pattern="^banks_delete$"))
     app.add_handler(CallbackQueryHandler(edit_bank_settings_handler, pattern="^edit_bank_.*$"))
-    app.add_handler(CallbackQueryHandler(toggle_bank_setting_handler, pattern="^toggle_(active|register|change)_.*$"))
+    app.add_handler(CallbackQueryHandler(toggle_bank_setting_handler, pattern="^(toggle_(active|register|change)|edit_(price|description))_.*$"))
     app.add_handler(CallbackQueryHandler(confirm_delete_bank_handler, pattern="^delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(final_delete_bank_handler, pattern="^confirm_delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
@@ -154,6 +156,10 @@ def main():
     app.add_handler(CallbackQueryHandler(delete_group_handler, pattern="^groups_delete$"))
     app.add_handler(CallbackQueryHandler(confirm_delete_group_handler, pattern="^delete_group_.*$"))
     app.add_handler(CallbackQueryHandler(final_delete_group_handler, pattern="^confirm_delete_group_.*$"))
+
+    # Form template management
+    app.add_handler(CallbackQueryHandler(form_templates_menu_handler, pattern="^form_templates_menu$"))
+    app.add_handler(CallbackQueryHandler(form_templates_list_handler, pattern="^form_templates_list$"))
 
     # Instruction management conversation
     from handlers.instruction_management import (

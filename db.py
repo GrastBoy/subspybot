@@ -228,6 +228,17 @@ def ensure_schema():
         FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
     );
     """)
+    # bank form templates
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS bank_form_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bank_name TEXT NOT NULL,
+        template_data TEXT,  -- JSON with form template fields
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(bank_name) REFERENCES banks(name) ON DELETE CASCADE
+    );
+    """)
     # active order tracking for managers
     _executescript("""
     CREATE TABLE IF NOT EXISTS manager_active_orders (
@@ -503,6 +514,46 @@ def get_bank_instructions(bank_name: str, action: str = None):
             FROM bank_instructions WHERE bank_name=? ORDER BY action, step_number
         """, (bank_name,))
     return cursor.fetchall()
+
+def get_bank_form_template(bank_name: str):
+    """Get form template for a bank"""
+    cursor.execute("SELECT template_data FROM bank_form_templates WHERE bank_name=?", (bank_name,))
+    row = cursor.fetchone()
+    if row:
+        import json
+        return json.loads(row[0]) if row[0] else None
+    return None
+
+def set_bank_form_template(bank_name: str, template_data: dict) -> bool:
+    """Set form template for a bank"""
+    import json
+    try:
+        template_json = json.dumps(template_data, ensure_ascii=False)
+        # Check if template exists
+        cursor.execute("SELECT id FROM bank_form_templates WHERE bank_name=?", (bank_name,))
+        if cursor.fetchone():
+            # Update existing
+            cursor.execute("UPDATE bank_form_templates SET template_data=?, updated_at=CURRENT_TIMESTAMP WHERE bank_name=?",
+                         (template_json, bank_name))
+        else:
+            # Insert new
+            cursor.execute("INSERT INTO bank_form_templates (bank_name, template_data) VALUES (?,?)",
+                         (bank_name, template_json))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("set_bank_form_template failed: %s", e)
+        return False
+
+def delete_bank_form_template(bank_name: str) -> bool:
+    """Delete form template for a bank"""
+    try:
+        cursor.execute("DELETE FROM bank_form_templates WHERE bank_name=?", (bank_name,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("delete_bank_form_template failed: %s", e)
+        return False
 
 def get_db():
     return conn, cursor
