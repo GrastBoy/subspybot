@@ -193,15 +193,38 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Вкажіть order_id. Приклад: /finish_order 123")
             return
         order_id = int(args[0])
-        cursor.execute("SELECT user_id, group_id FROM orders WHERE id=? AND status!='Завершено'", (order_id,))
+        cursor.execute("SELECT user_id, group_id, bank FROM orders WHERE id=? AND status!='Завершено'", (order_id,))
         row = cursor.fetchone()
         if not row:
             await update.message.reply_text("❌ Замовлення не знайдено або вже завершено.")
             return
-        client_user_id, group_chat_id = row[0], row[1]
+        client_user_id, group_chat_id, bank_name = row[0], row[1], row[2]
 
         cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
         conn.commit()
+
+        # Generate and send questionnaire
+        try:
+            from db import generate_order_questionnaire
+            questionnaire = generate_order_questionnaire(order_id, bank_name)
+            
+            # Send questionnaire to the admin who finished the order
+            await update.message.reply_text(f"✅ Замовлення {order_id} завершено.\n\n{questionnaire}", parse_mode='HTML')
+            
+            # Also send to the manager group if it exists
+            if group_chat_id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=group_chat_id, 
+                        text=f"📋 Замовлення #{order_id} завершено. Ось підсумкова анкета:\n\n{questionnaire}",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send questionnaire to group {group_chat_id}: {e}")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to generate questionnaire for order {order_id}: {e}")
+            await update.message.reply_text(f"✅ Замовлення {order_id} завершено. (Помилка генерації анкети: {e})")
 
         if group_chat_id:
             try:
@@ -216,7 +239,6 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        await update.message.reply_text(f"✅ Замовлення {order_id} завершено.")
         logger.info(f"Order {order_id} завершено адміністратором.")
 
         try:
@@ -555,10 +577,24 @@ async def order_form_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         order_id = int(context.args[0])
-        from handlers.order_forms import get_order_form
-        await get_order_form(update, context, order_id)
+        
+        # Get order details to determine bank
+        from db import cursor, generate_order_questionnaire
+        cursor.execute("SELECT bank FROM orders WHERE id = ?", (order_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return await update.message.reply_text(f"❌ Замовлення #{order_id} не знайдено")
+        
+        bank_name = row[0]
+        questionnaire = generate_order_questionnaire(order_id, bank_name)
+        
+        await update.message.reply_text(questionnaire, parse_mode='HTML')
+        
     except ValueError:
         await update.message.reply_text("❌ Order ID має бути числом")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Помилка: {e}")
 
 async def list_forms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List order forms"""

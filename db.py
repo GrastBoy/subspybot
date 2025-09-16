@@ -555,6 +555,91 @@ def delete_bank_form_template(bank_name: str) -> bool:
         logger.warning("delete_bank_form_template failed: %s", e)
         return False
 
+def generate_order_questionnaire(order_id: int, bank_name: str) -> str:
+    """Generate final questionnaire for manager from order and template"""
+    import json
+    from datetime import datetime
+    
+    try:
+        # Get order details
+        cursor.execute("""
+            SELECT id, user_id, username, bank, action, stage, status, 
+                   phone_number, email, created_at
+            FROM orders 
+            WHERE id = ?
+        """, (order_id,))
+        order_data = cursor.fetchone()
+        
+        if not order_data:
+            return f"❌ Замовлення #{order_id} не знайдено"
+            
+        (oid, user_id, username, bank, action, stage, status, phone_number, 
+         email, created_at) = order_data
+        
+        # Get form template
+        template = get_bank_form_template(bank_name)
+        if not template:
+            return f"❌ Шаблон анкети для банку '{bank_name}' не знайдено"
+        
+        # Get order photos
+        cursor.execute("""
+            SELECT stage, file_unique_id, created_at 
+            FROM order_photos 
+            WHERE order_id = ? AND active = 1 
+            ORDER BY stage, created_at
+        """, (order_id,))
+        photos = cursor.fetchall()
+        
+        # Build questionnaire
+        questionnaire = f"📋 <b>Анкета замовлення #{order_id}</b>\n"
+        questionnaire += f"🏦 Банк: {bank_name}\n"
+        questionnaire += f"🔄 Дія: {action}\n"
+        questionnaire += f"📅 Створено: {created_at}\n"
+        questionnaire += f"📊 Статус: {status}\n\n"
+        
+        questionnaire += "<b>📝 Дані анкети:</b>\n"
+        
+        # Process template fields
+        for field in template.get('fields', []):
+            field_name = field.get('name', 'Невідоме поле')
+            field_type = field.get('type', 'text')
+            
+            if field_name == 'ФІО':
+                # Use username as full name fallback
+                full_name = username or f"user_{user_id}"
+                questionnaire += f"• {field_name}: {full_name}\n"
+            elif 'номер користувача' in field_name.lower():
+                questionnaire += f"• {field_name}: {phone_number or 'Не вказано'}\n"
+            elif 'пошта' in field_name.lower() and 'менеджер' in field_name.lower():
+                questionnaire += f"• {field_name}: {email or 'Не вказано'}\n"
+            elif 'телеграм' in field_name.lower():
+                questionnaire += f"• {field_name}: @{username or user_id}\n"
+            elif 'час створення' in field_name.lower():
+                questionnaire += f"• {field_name}: {created_at}\n"
+            else:
+                # For fields like manager phone, bank password - these would be filled during order processing
+                questionnaire += f"• {field_name}: [Буде заповнено менеджером]\n"
+        
+        # Add photos section
+        if photos:
+            questionnaire += f"\n<b>📸 Скріни ({len(photos)} шт.):</b>\n"
+            stages = {}
+            for stage_num, file_id, photo_time in photos:
+                if stage_num not in stages:
+                    stages[stage_num] = []
+                stages[stage_num].append((file_id, photo_time))
+            
+            for stage_num in sorted(stages.keys()):
+                questionnaire += f"Етап {stage_num + 1}: {len(stages[stage_num])} фото\n"
+        else:
+            questionnaire += "\n📸 Скріни: Немає прикріплених фото\n"
+            
+        return questionnaire
+        
+    except Exception as e:
+        logger.warning("generate_order_questionnaire failed: %s", e)
+        return f"❌ Помилка при генерації анкети: {e}"
+
 def get_db():
     return conn, cursor
 
