@@ -1,23 +1,49 @@
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ConversationHandler, filters
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ConversationHandler,
+    MessageHandler,
+    filters,
 )
-from db import conn, logger, BOT_TOKEN, LOCK_FILE
-from states import COOPERATION_INPUT, REJECT_REASON, MANAGER_MESSAGE
-from handlers.menu_handlers import start, main_menu_handler, age_confirm_handler
-from handlers.photo_handlers import handle_photos, handle_admin_action, reject_reason_handler, manager_message_handler
-from handlers.cooperation_handlers import cooperation_start_handler, cooperation_receive, cancel
+
+from db import BOT_TOKEN, LOCK_FILE, conn, logger
 from handlers.admin_handlers import (
-    history, add_group, del_group, list_groups, show_queue,
-    finish_order, finish_all_orders, orders_stats,
-    add_admin, remove_admin, list_admins, stage2debug, admin_help,
-    tmpl_list, tmpl_set, tmpl_del, banks, bank_show, bank_hide,
-    bank_management_cmd, add_bank_cmd, add_bank_group_cmd, add_admin_group_cmd,
-    data_history_cmd, order_form_cmd, list_forms_cmd, active_orders_cmd
+    active_orders_cmd,
+    add_admin,
+    add_admin_group_cmd,
+    add_bank_cmd,
+    add_bank_group_cmd,
+    add_group,
+    admin_help,
+    bank_hide,
+    bank_management_cmd,
+    bank_show,
+    banks,
+    data_history_cmd,
+    del_group,
+    finish_all_orders,
+    finish_order,
+    history,
+    list_admins,
+    list_forms_cmd,
+    list_groups,
+    order_form_cmd,
+    orders_stats,
+    remove_admin,
+    show_queue,
+    stage2debug,
+    tmpl_del,
+    tmpl_list,
+    tmpl_set,
 )
-from handlers.status_handler import status
+from handlers.cooperation_handlers import cancel, cooperation_receive, cooperation_start_handler
+from handlers.menu_handlers import age_confirm_handler, main_menu_handler, start
+from handlers.photo_handlers import handle_admin_action, handle_photos, manager_message_handler, reject_reason_handler
+from handlers.stage2_handlers import set_current_order_cmd, stage2_user_text
 from handlers.stage2_router import build_stage2_handlers
-from handlers.stage2_handlers import stage2_user_text, set_current_order_cmd
+from handlers.status_handler import status
+from states import COOPERATION_INPUT, MANAGER_MESSAGE, REJECT_REASON
 
 
 def main():
@@ -34,14 +60,14 @@ def main():
     # Фото етап (Stage1)
     app.add_handler(MessageHandler(filters.PHOTO, handle_photos))
     app.add_handler(CallbackQueryHandler(handle_admin_action, pattern="^(approve|reject)_.*$"))
-    
+
     # Data validation callbacks
     from handlers.data_validation import handle_data_reuse_confirmation
     app.add_handler(CallbackQueryHandler(handle_data_reuse_confirmation, pattern="^(confirm_reuse|cancel_reuse)_.*$"))
-    
+
     # Multi-order management callbacks
     from handlers.multi_order_management import handle_active_order_management
-    app.add_handler(CallbackQueryHandler(handle_active_order_management, 
+    app.add_handler(CallbackQueryHandler(handle_active_order_management,
                                        pattern="^(refresh_active_orders|switch_primary|add_active_order|remove_active_order|set_primary_|add_order_|remove_order_).*$"))
 
     # Stage2 handlers (user + manager flows)
@@ -62,10 +88,17 @@ def main():
 
     # Bank management conversation
     from handlers.bank_management import (
-        banks_management_menu, list_banks_handler, add_bank_handler, 
-        bank_name_input_handler, bank_settings_handler, instructions_menu_handler,
-        groups_menu_handler, list_groups_handler, cancel_conversation,
-        BANK_NAME_INPUT, BANK_SETTINGS_INPUT
+        BANK_NAME_INPUT,
+        BANK_SETTINGS_INPUT,
+        add_bank_handler,
+        bank_name_input_handler,
+        bank_settings_handler,
+        banks_management_menu,
+        cancel_conversation,
+        groups_menu_handler,
+        instructions_menu_handler,
+        list_banks_handler,
+        list_groups_handler,
     )
     conv_bank_management = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_bank_handler, pattern="^banks_add$")],
@@ -77,22 +110,28 @@ def main():
         per_chat=True
     )
     app.add_handler(conv_bank_management)
-    
+
     # Bank management callback handlers
     app.add_handler(CallbackQueryHandler(banks_management_menu, pattern="^banks_menu$"))
     app.add_handler(CallbackQueryHandler(list_banks_handler, pattern="^banks_list$"))
     app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
     app.add_handler(CallbackQueryHandler(groups_menu_handler, pattern="^groups_menu$"))
     app.add_handler(CallbackQueryHandler(list_groups_handler, pattern="^groups_list$"))
-    
+
     # Instruction management conversation
     from handlers.instruction_management import (
-        instructions_list_handler, instructions_add_handler,
-        instruction_bank_select_handler, instruction_action_select_handler,
-        instruction_text_input_handler, instruction_add_another_handler,
-        cancel_instruction_conversation, manage_bank_instructions_cmd,
+        INSTR_ACTION_SELECT,
+        INSTR_BANK_SELECT,
+        INSTR_TEXT_INPUT,
+        cancel_instruction_conversation,
+        instruction_action_select_handler,
+        instruction_add_another_handler,
+        instruction_bank_select_handler,
+        instruction_text_input_handler,
+        instructions_add_handler,
+        instructions_list_handler,
+        manage_bank_instructions_cmd,
         sync_instructions_to_file_cmd,
-        INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_TEXT_INPUT
     )
     conv_instruction_management = ConversationHandler(
         entry_points=[CallbackQueryHandler(instructions_add_handler, pattern="^instructions_add$")],
@@ -105,18 +144,18 @@ def main():
         per_chat=True
     )
     app.add_handler(conv_instruction_management)
-    
+
     # Instruction management callbacks
     app.add_handler(CallbackQueryHandler(instructions_list_handler, pattern="^instructions_list$"))
     app.add_handler(CallbackQueryHandler(instruction_add_another_handler, pattern="^instr_add_another$"))
-    
+
     # Add sync callback handler
     async def sync_callback_handler(update, context):
         query = update.callback_query
         await query.answer()
         if query.data == "sync_to_file":
             await sync_instructions_to_file_cmd(update, context)
-    
+
     app.add_handler(CallbackQueryHandler(sync_callback_handler, pattern="^sync_to_file$"))
 
     # Admin/user commands
@@ -150,7 +189,7 @@ def main():
     app.add_handler(CommandHandler("banks", banks))
     app.add_handler(CommandHandler("bank_show", bank_show))
     app.add_handler(CommandHandler("bank_hide", bank_hide))
-    
+
     # Enhanced bank and group management
     app.add_handler(CommandHandler("bank_management", bank_management_cmd))
     app.add_handler(CommandHandler("add_bank", add_bank_cmd))

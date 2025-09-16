@@ -1,5 +1,6 @@
 from db import logger
 
+
 async def error_handler(update: object, context):
     logger.exception("Ошибка в аплікації: %s", context.error)
     try:

@@ -6,10 +6,10 @@ This script shows how to use all the new features that have been implemented.
 
 def show_usage_examples():
     """Show usage examples for all new features"""
-    
+
     print("🤖 Enhanced Telegram Bot Features - Usage Guide")
     print("=" * 60)
-    
+
     print("\n1. 🏦 BANK MANAGEMENT")
     print("-" * 30)
     print("Add a new bank:")
@@ -20,7 +20,7 @@ def show_usage_examples():
     print("  /bank_show Monobank register")
     print("  /bank_hide Monobank change")
     print()
-    
+
     print("2. 👥 GROUP MANAGEMENT")
     print("-" * 30)
     print("Add bank-specific manager group:")
@@ -29,7 +29,7 @@ def show_usage_examples():
     print("Add admin group (can see all orders):")
     print("  /add_admin_group -1001234567891 'Admin Group'")
     print()
-    
+
     print("3. 📋 MULTI-ORDER MANAGEMENT")
     print("-" * 30)
     print("In manager groups:")
@@ -42,7 +42,7 @@ def show_usage_examples():
     print("  ➕ Add order to active list")
     print("  ➖ Remove from active list")
     print()
-    
+
     print("4. 🔍 DATA UNIQUENESS CHECKING")
     print("-" * 30)
     print("Automatic checking when manager enters data:")
@@ -53,7 +53,7 @@ def show_usage_examples():
     print("View usage history:")
     print("  /data_history Monobank")
     print()
-    
+
     print("5. 📝 INSTRUCTION MANAGEMENT")
     print("-" * 30)
     print("Manage instructions through bot:")
@@ -68,7 +68,7 @@ def show_usage_examples():
     print("Sync to file:")
     print("  /sync_instructions  # Creates instructions_generated.py")
     print()
-    
+
     print("6. 📄 ORDER FORMS/QUESTIONNAIRES")
     print("-" * 30)
     print("Automatic generation when order completes:")
@@ -83,7 +83,7 @@ def show_usage_examples():
     print("  /list_forms         # List recent forms")
     print("  /list_forms Monobank # Forms for specific bank")
     print()
-    
+
     print("7. 🔧 ENHANCED ADMIN COMMANDS")
     print("-" * 30)
     print("All admin commands:")
@@ -98,7 +98,7 @@ def show_usage_examples():
     print("  /manage_instructions <bank>")
     print("  /sync_instructions       # Export to file")
     print()
-    
+
     print("8. 🎯 WORKFLOW EXAMPLES")
     print("-" * 30)
     print("Typical admin setup workflow:")
@@ -120,7 +120,7 @@ def show_usage_examples():
     print("3. Orders auto-route to correct bank groups")
     print("4. Admin group sees all orders")
     print()
-    
+
     print("9. ⚙️ CONFIGURATION NOTES")
     print("-" * 30)
     print("Environment variables needed:")
@@ -136,7 +136,7 @@ def show_usage_examples():
     print("  - order_forms (questionnaires)")
     print("  - Enhanced manager_groups (bank-specific)")
     print()
-    
+
     print("10. 🚀 GETTING STARTED")
     print("-" * 30)
     print("1. Set environment variables")
@@ -147,7 +147,7 @@ def show_usage_examples():
     print("6. Configure instructions: /bank_management")
     print("7. Test with a real order!")
     print()
-    
+
     print("✨ All features are backwards compatible!")
     print("🔄 Existing functionality continues to work")
     print("➕ New features add capabilities without breaking changes")

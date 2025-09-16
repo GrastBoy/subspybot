@@ -1,7 +1,9 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
-from db import cursor, conn, ADMIN_GROUP_ID
+
+from db import ADMIN_GROUP_ID, conn, cursor
 from states import COOPERATION_INPUT
+
 
 async def cooperation_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

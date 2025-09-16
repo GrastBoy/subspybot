@@ -1,8 +1,10 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
-from states import user_states, find_age_requirement, INSTRUCTIONS
+
 from db import cursor
-from handlers.photo_handlers import create_order_in_db, assign_group_or_queue, send_instruction
+from handlers.photo_handlers import assign_group_or_queue, create_order_in_db, send_instruction
+from states import INSTRUCTIONS, find_age_requirement, user_states
+
 
 def _banks_from_instructions(action: str):
     return [bank for bank, actions in INSTRUCTIONS.items() if action in actions and actions[action]]
