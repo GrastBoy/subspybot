@@ -49,4 +49,5 @@ bot.lock
 Thumbs.db
 
 # Logs
-*.log
+*.log*.pyc
+__pycache__/
