@@ -11,7 +11,9 @@ from handlers.admin_handlers import (
     history, add_group, del_group, list_groups, show_queue,
     finish_order, finish_all_orders, orders_stats,
     add_admin, remove_admin, list_admins, stage2debug, admin_help,
-    tmpl_list, tmpl_set, tmpl_del, banks, bank_show, bank_hide
+    tmpl_list, tmpl_set, tmpl_del, banks, bank_show, bank_hide,
+    bank_management_cmd, add_bank_cmd, add_bank_group_cmd, add_admin_group_cmd,
+    data_history_cmd, order_form_cmd, list_forms_cmd, active_orders_cmd
 )
 from handlers.status_handler import status
 from handlers.stage2_router import build_stage2_handlers
@@ -31,6 +33,15 @@ def main():
     # Фото етап (Stage1)
     app.add_handler(MessageHandler(filters.PHOTO, handle_photos))
     app.add_handler(CallbackQueryHandler(handle_admin_action, pattern="^(approve|reject)_.*$"))
+    
+    # Data validation callbacks
+    from handlers.data_validation import handle_data_reuse_confirmation
+    app.add_handler(CallbackQueryHandler(handle_data_reuse_confirmation, pattern="^(confirm_reuse|cancel_reuse)_.*$"))
+    
+    # Multi-order management callbacks
+    from handlers.multi_order_management import handle_active_order_management
+    app.add_handler(CallbackQueryHandler(handle_active_order_management, 
+                                       pattern="^(refresh_active_orders|switch_primary|add_active_order|remove_active_order|set_primary_|add_order_|remove_order_).*$"))
 
     # Stage2 handlers (user + manager flows)
     app.add_handler(build_stage2_handlers())
@@ -47,6 +58,65 @@ def main():
         per_chat=True
     )
     app.add_handler(conv_general)
+
+    # Bank management conversation
+    from handlers.bank_management import (
+        banks_management_menu, list_banks_handler, add_bank_handler, 
+        bank_name_input_handler, bank_settings_handler, instructions_menu_handler,
+        groups_menu_handler, list_groups_handler, cancel_conversation,
+        BANK_NAME_INPUT, BANK_SETTINGS_INPUT
+    )
+    conv_bank_management = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_bank_handler, pattern="^banks_add$")],
+        states={
+            BANK_NAME_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bank_name_input_handler)],
+            BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_reg_|bank_change_|bank_save).*$")]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        per_chat=True
+    )
+    app.add_handler(conv_bank_management)
+    
+    # Bank management callback handlers
+    app.add_handler(CallbackQueryHandler(banks_management_menu, pattern="^banks_menu$"))
+    app.add_handler(CallbackQueryHandler(list_banks_handler, pattern="^banks_list$"))
+    app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
+    app.add_handler(CallbackQueryHandler(groups_menu_handler, pattern="^groups_menu$"))
+    app.add_handler(CallbackQueryHandler(list_groups_handler, pattern="^groups_list$"))
+    
+    # Instruction management conversation
+    from handlers.instruction_management import (
+        instructions_list_handler, instructions_add_handler,
+        instruction_bank_select_handler, instruction_action_select_handler,
+        instruction_text_input_handler, instruction_add_another_handler,
+        cancel_instruction_conversation, manage_bank_instructions_cmd,
+        sync_instructions_to_file_cmd,
+        INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_TEXT_INPUT
+    )
+    conv_instruction_management = ConversationHandler(
+        entry_points=[CallbackQueryHandler(instructions_add_handler, pattern="^instructions_add$")],
+        states={
+            INSTR_BANK_SELECT: [CallbackQueryHandler(instruction_bank_select_handler, pattern="^instr_bank_.*$")],
+            INSTR_ACTION_SELECT: [CallbackQueryHandler(instruction_action_select_handler, pattern="^instr_action_.*$")],
+            INSTR_TEXT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, instruction_text_input_handler)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_instruction_conversation)],
+        per_chat=True
+    )
+    app.add_handler(conv_instruction_management)
+    
+    # Instruction management callbacks
+    app.add_handler(CallbackQueryHandler(instructions_list_handler, pattern="^instructions_list$"))
+    app.add_handler(CallbackQueryHandler(instruction_add_another_handler, pattern="^instr_add_another$"))
+    
+    # Add sync callback handler
+    async def sync_callback_handler(update, context):
+        query = update.callback_query
+        await query.answer()
+        if query.data == "sync_to_file":
+            await sync_instructions_to_file_cmd(update, context)
+    
+    app.add_handler(CallbackQueryHandler(sync_callback_handler, pattern="^sync_to_file$"))
 
     # Admin/user commands
     app.add_handler(CommandHandler("history", history))
@@ -79,6 +149,18 @@ def main():
     app.add_handler(CommandHandler("banks", banks))
     app.add_handler(CommandHandler("bank_show", bank_show))
     app.add_handler(CommandHandler("bank_hide", bank_hide))
+    
+    # Enhanced bank and group management
+    app.add_handler(CommandHandler("bank_management", bank_management_cmd))
+    app.add_handler(CommandHandler("add_bank", add_bank_cmd))
+    app.add_handler(CommandHandler("add_bank_group", add_bank_group_cmd))
+    app.add_handler(CommandHandler("add_admin_group", add_admin_group_cmd))
+    app.add_handler(CommandHandler("data_history", data_history_cmd))
+    app.add_handler(CommandHandler("order_form", order_form_cmd))
+    app.add_handler(CommandHandler("list_forms", list_forms_cmd))
+    app.add_handler(CommandHandler("active_orders", active_orders_cmd))
+    app.add_handler(CommandHandler("manage_instructions", manage_bank_instructions_cmd))
+    app.add_handler(CommandHandler("sync_instructions", sync_instructions_to_file_cmd))
 
     logger.info("Бот запущений...")
     app.run_polling()
