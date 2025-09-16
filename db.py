@@ -228,6 +228,17 @@ def ensure_schema():
         FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
     );
     """)
+    # bank form templates
+    _executescript("""
+    CREATE TABLE IF NOT EXISTS bank_form_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bank_name TEXT NOT NULL,
+        template_data TEXT,  -- JSON with form template fields
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(bank_name) REFERENCES banks(name) ON DELETE CASCADE
+    );
+    """)
     # active order tracking for managers
     _executescript("""
     CREATE TABLE IF NOT EXISTS manager_active_orders (
@@ -302,6 +313,14 @@ def ensure_schema():
         {
             "bank": "ALTER TABLE manager_groups ADD COLUMN bank TEXT",
             "is_admin_group": "ALTER TABLE manager_groups ADD COLUMN is_admin_group INTEGER DEFAULT 0"
+        }
+    )
+    # Migrations for banks table
+    _ensure_columns("banks",
+                    ["price", "description"],
+        {
+            "price": "ALTER TABLE banks ADD COLUMN price TEXT",
+            "description": "ALTER TABLE banks ADD COLUMN description TEXT"
         }
     )
     _ensure_indexes()
@@ -406,18 +425,18 @@ def create_order_form(order_id: int, form_data: dict):
     except Exception as e:
         logger.warning("create_order_form failed: %s", e)
 
-def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True) -> bool:
+def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, price: str = None, description: str = None) -> bool:
     """Add a new bank"""
     try:
-        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled) VALUES (?,?,?)",
-                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0))
+        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled, price, description) VALUES (?,?,?,?,?)",
+                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description))
         conn.commit()
         return True
     except Exception as e:
         logger.warning("add_bank failed: %s", e)
         return False
 
-def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None) -> bool:
+def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None, price: str = None, description: str = None) -> bool:
     """Update bank settings"""
     try:
         updates = []
@@ -431,6 +450,12 @@ def update_bank(name: str, register_enabled: bool = None, change_enabled: bool =
         if is_active is not None:
             updates.append("is_active=?")
             params.append(1 if is_active else 0)
+        if price is not None:
+            updates.append("price=?")
+            params.append(price)
+        if description is not None:
+            updates.append("description=?")
+            params.append(description)
 
         if updates:
             params.append(name)
@@ -473,7 +498,7 @@ def add_bank_instruction(bank_name: str, action: str, step_number: int,
 
 def get_banks():
     """Get all banks"""
-    cursor.execute("SELECT name, is_active, register_enabled, change_enabled FROM banks ORDER BY name")
+    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description FROM banks ORDER BY name")
     return cursor.fetchall()
 
 def get_bank_instructions(bank_name: str, action: str = None):
@@ -489,6 +514,131 @@ def get_bank_instructions(bank_name: str, action: str = None):
             FROM bank_instructions WHERE bank_name=? ORDER BY action, step_number
         """, (bank_name,))
     return cursor.fetchall()
+
+def get_bank_form_template(bank_name: str):
+    """Get form template for a bank"""
+    cursor.execute("SELECT template_data FROM bank_form_templates WHERE bank_name=?", (bank_name,))
+    row = cursor.fetchone()
+    if row:
+        import json
+        return json.loads(row[0]) if row[0] else None
+    return None
+
+def set_bank_form_template(bank_name: str, template_data: dict) -> bool:
+    """Set form template for a bank"""
+    import json
+    try:
+        template_json = json.dumps(template_data, ensure_ascii=False)
+        # Check if template exists
+        cursor.execute("SELECT id FROM bank_form_templates WHERE bank_name=?", (bank_name,))
+        if cursor.fetchone():
+            # Update existing
+            cursor.execute("UPDATE bank_form_templates SET template_data=?, updated_at=CURRENT_TIMESTAMP WHERE bank_name=?",
+                         (template_json, bank_name))
+        else:
+            # Insert new
+            cursor.execute("INSERT INTO bank_form_templates (bank_name, template_data) VALUES (?,?)",
+                         (bank_name, template_json))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("set_bank_form_template failed: %s", e)
+        return False
+
+def delete_bank_form_template(bank_name: str) -> bool:
+    """Delete form template for a bank"""
+    try:
+        cursor.execute("DELETE FROM bank_form_templates WHERE bank_name=?", (bank_name,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("delete_bank_form_template failed: %s", e)
+        return False
+
+def generate_order_questionnaire(order_id: int, bank_name: str) -> str:
+    """Generate final questionnaire for manager from order and template"""
+    import json
+    from datetime import datetime
+    
+    try:
+        # Get order details
+        cursor.execute("""
+            SELECT id, user_id, username, bank, action, stage, status, 
+                   phone_number, email, created_at
+            FROM orders 
+            WHERE id = ?
+        """, (order_id,))
+        order_data = cursor.fetchone()
+        
+        if not order_data:
+            return f"❌ Замовлення #{order_id} не знайдено"
+            
+        (oid, user_id, username, bank, action, stage, status, phone_number, 
+         email, created_at) = order_data
+        
+        # Get form template
+        template = get_bank_form_template(bank_name)
+        if not template:
+            return f"❌ Шаблон анкети для банку '{bank_name}' не знайдено"
+        
+        # Get order photos
+        cursor.execute("""
+            SELECT stage, file_unique_id, created_at 
+            FROM order_photos 
+            WHERE order_id = ? AND active = 1 
+            ORDER BY stage, created_at
+        """, (order_id,))
+        photos = cursor.fetchall()
+        
+        # Build questionnaire
+        questionnaire = f"📋 <b>Анкета замовлення #{order_id}</b>\n"
+        questionnaire += f"🏦 Банк: {bank_name}\n"
+        questionnaire += f"🔄 Дія: {action}\n"
+        questionnaire += f"📅 Створено: {created_at}\n"
+        questionnaire += f"📊 Статус: {status}\n\n"
+        
+        questionnaire += "<b>📝 Дані анкети:</b>\n"
+        
+        # Process template fields
+        for field in template.get('fields', []):
+            field_name = field.get('name', 'Невідоме поле')
+            field_type = field.get('type', 'text')
+            
+            if field_name == 'ФІО':
+                # Use username as full name fallback
+                full_name = username or f"user_{user_id}"
+                questionnaire += f"• {field_name}: {full_name}\n"
+            elif 'номер користувача' in field_name.lower():
+                questionnaire += f"• {field_name}: {phone_number or 'Не вказано'}\n"
+            elif 'пошта' in field_name.lower() and 'менеджер' in field_name.lower():
+                questionnaire += f"• {field_name}: {email or 'Не вказано'}\n"
+            elif 'телеграм' in field_name.lower():
+                questionnaire += f"• {field_name}: @{username or user_id}\n"
+            elif 'час створення' in field_name.lower():
+                questionnaire += f"• {field_name}: {created_at}\n"
+            else:
+                # For fields like manager phone, bank password - these would be filled during order processing
+                questionnaire += f"• {field_name}: [Буде заповнено менеджером]\n"
+        
+        # Add photos section
+        if photos:
+            questionnaire += f"\n<b>📸 Скріни ({len(photos)} шт.):</b>\n"
+            stages = {}
+            for stage_num, file_id, photo_time in photos:
+                if stage_num not in stages:
+                    stages[stage_num] = []
+                stages[stage_num].append((file_id, photo_time))
+            
+            for stage_num in sorted(stages.keys()):
+                questionnaire += f"Етап {stage_num + 1}: {len(stages[stage_num])} фото\n"
+        else:
+            questionnaire += "\n📸 Скріни: Немає прикріплених фото\n"
+            
+        return questionnaire
+        
+    except Exception as e:
+        logger.warning("generate_order_questionnaire failed: %s", e)
+        return f"❌ Помилка при генерації анкети: {e}"
 
 def get_db():
     return conn, cursor

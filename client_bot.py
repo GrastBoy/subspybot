@@ -39,6 +39,7 @@ from handlers.admin_handlers import (
 )
 from handlers.cooperation_handlers import cancel, cooperation_receive, cooperation_start_handler
 from handlers.menu_handlers import age_confirm_handler, main_menu_handler, start
+from handlers.order_handlers import myorders
 from handlers.photo_handlers import handle_admin_action, handle_photos, manager_message_handler, reject_reason_handler
 from handlers.stage2_handlers import set_current_order_cmd, stage2_user_text
 from handlers.stage2_router import build_stage2_handlers
@@ -89,11 +90,15 @@ def main():
     # Bank management conversation
     from handlers.bank_management import (
         BANK_NAME_INPUT,
+        BANK_PRICE_INPUT,
+        BANK_DESCRIPTION_INPUT,
         BANK_SETTINGS_INPUT,
         add_admin_group_handler,
         add_bank_group_handler,
         add_bank_handler,
         bank_name_input_handler,
+        bank_price_input_handler,
+        bank_description_input_handler,
         bank_settings_handler,
         banks_management_menu,
         cancel_conversation,
@@ -105,6 +110,8 @@ def main():
         edit_bank_settings_handler,
         final_delete_bank_handler,
         final_delete_group_handler,
+        form_templates_menu_handler,
+        form_templates_list_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
@@ -116,6 +123,14 @@ def main():
         entry_points=[CallbackQueryHandler(add_bank_handler, pattern="^banks_add$")],
         states={
             BANK_NAME_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bank_name_input_handler)],
+            BANK_PRICE_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bank_price_input_handler),
+                CallbackQueryHandler(bank_price_input_handler, pattern="^skip_price$")
+            ],
+            BANK_DESCRIPTION_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bank_description_input_handler),
+                CallbackQueryHandler(bank_description_input_handler, pattern="^skip_description$")
+            ],
             BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_reg_|bank_change_|bank_save).*$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
@@ -129,7 +144,7 @@ def main():
     app.add_handler(CallbackQueryHandler(edit_bank_handler, pattern="^banks_edit$"))
     app.add_handler(CallbackQueryHandler(delete_bank_handler, pattern="^banks_delete$"))
     app.add_handler(CallbackQueryHandler(edit_bank_settings_handler, pattern="^edit_bank_.*$"))
-    app.add_handler(CallbackQueryHandler(toggle_bank_setting_handler, pattern="^toggle_(active|register|change)_.*$"))
+    app.add_handler(CallbackQueryHandler(toggle_bank_setting_handler, pattern="^(toggle_(active|register|change)|edit_(price|description))_.*$"))
     app.add_handler(CallbackQueryHandler(confirm_delete_bank_handler, pattern="^delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(final_delete_bank_handler, pattern="^confirm_delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
@@ -141,6 +156,10 @@ def main():
     app.add_handler(CallbackQueryHandler(delete_group_handler, pattern="^groups_delete$"))
     app.add_handler(CallbackQueryHandler(confirm_delete_group_handler, pattern="^delete_group_.*$"))
     app.add_handler(CallbackQueryHandler(final_delete_group_handler, pattern="^confirm_delete_group_.*$"))
+
+    # Form template management
+    app.add_handler(CallbackQueryHandler(form_templates_menu_handler, pattern="^form_templates_menu$"))
+    app.add_handler(CallbackQueryHandler(form_templates_list_handler, pattern="^form_templates_list$"))
 
     # Instruction management conversation
     from handlers.instruction_management import (
@@ -205,6 +224,8 @@ def main():
 
     # Group quick switch current order: /o <id>
     app.add_handler(CommandHandler("order", set_current_order_cmd))
+    app.add_handler(CommandHandler("o", set_current_order_cmd))  # Short alias for order command
+    app.add_handler(CommandHandler("myorders", myorders))
 
     # User -> managers autobridge (private text)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, stage2_user_text))

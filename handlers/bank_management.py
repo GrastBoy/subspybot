@@ -12,6 +12,9 @@ from db import (
     delete_bank,
     get_bank_groups,
     get_banks,
+    get_bank_form_template,
+    set_bank_form_template,
+    delete_bank_form_template,
     is_admin,
     log_action,
     update_bank,
@@ -20,9 +23,9 @@ from db import (
 logger = logging.getLogger(__name__)
 
 # Conversation states
-BANK_NAME_INPUT, BANK_SETTINGS_INPUT = range(2)
-INSTRUCTION_BANK_SELECT, INSTRUCTION_ACTION_SELECT, INSTRUCTION_STEP_INPUT = range(3, 6)
-GROUP_BANK_SELECT, GROUP_NAME_INPUT = range(6, 8)
+BANK_NAME_INPUT, BANK_PRICE_INPUT, BANK_DESCRIPTION_INPUT, BANK_SETTINGS_INPUT = range(4)
+INSTRUCTION_BANK_SELECT, INSTRUCTION_ACTION_SELECT, INSTRUCTION_STEP_INPUT = range(4, 7)
+GROUP_BANK_SELECT, GROUP_NAME_INPUT = range(7, 9)
 
 async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main banks management menu"""
@@ -39,6 +42,7 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("✏️ Редагувати банк", callback_data="banks_edit")],
         [InlineKeyboardButton("🗑️ Видалити банк", callback_data="banks_delete")],
         [InlineKeyboardButton("📝 Управління інструкціями", callback_data="instructions_menu")],
+        [InlineKeyboardButton("📋 Шаблони анкет", callback_data="form_templates_menu")],
         [InlineKeyboardButton("👥 Управління групами", callback_data="groups_menu")]
     ]
 
@@ -48,8 +52,12 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-    else:
+    elif update.message:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    else:
+        # Fallback for edge cases where neither callback_query nor message is available
+        logger.warning("banks_management_menu called without valid update.callback_query or update.message")
+        return
 
 async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all banks with their settings"""
@@ -65,14 +73,19 @@ async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text = "📋 <b>Список банків</b>\n\n❌ Немає зареєстрованих банків"
     else:
         text = "📋 <b>Список банків</b>\n\n"
-        for name, is_active, register_enabled, change_enabled in banks:
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
             status = "✅ Активний" if is_active else "❌ Неактивний"
             register_status = "✅" if register_enabled else "❌"
             change_status = "✅" if change_enabled else "❌"
 
             text += f"🏦 <b>{name}</b>\n"
             text += f"   Статус: {status}\n"
-            text += f"   Реєстрація: {register_status} | Перев'язка: {change_status}\n\n"
+            text += f"   Реєстрація: {register_status} | Перев'язка: {change_status}\n"
+            if price:
+                text += f"   💰 Ціна: {price}\n"
+            if description:
+                text += f"   📝 Опис: {description}\n"
+            text += "\n"
 
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
@@ -98,12 +111,61 @@ async def bank_name_input_handler(update: Update, context: ContextTypes.DEFAULT_
         return BANK_NAME_INPUT
 
     # Check if bank already exists
-    existing_banks = [name for name, _, _, _ in get_banks()]
+    existing_banks = [name for name, _, _, _, _, _ in get_banks()]
     if bank_name in existing_banks:
         await update.message.reply_text(f"❌ Банк '{bank_name}' вже існує. Введіть іншу назву:")
         return BANK_NAME_INPUT
 
     context.user_data['new_bank_name'] = bank_name
+
+    text = f"💰 <b>Ціна для банку '{bank_name}'</b>\n\n"
+    text += "Введіть ціну банку (наприклад: '500 грн', '20$', 'безкоштовно') або натисніть кнопку 'Пропустити':"
+
+    keyboard = [[InlineKeyboardButton("⏭️ Пропустити", callback_data="skip_price")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    return BANK_PRICE_INPUT
+
+async def bank_price_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle bank price input"""
+    if update.callback_query and update.callback_query.data == "skip_price":
+        await update.callback_query.answer()
+        context.user_data['new_bank_price'] = None
+    else:
+        price = update.message.text.strip() if update.message else None
+        if not price:
+            await update.message.reply_text("❌ Будь ласка, введіть ціну або натисніть 'Пропустити'")
+            return BANK_PRICE_INPUT
+        context.user_data['new_bank_price'] = price
+
+    bank_name = context.user_data.get('new_bank_name', 'Unknown')
+    text = f"📝 <b>Опис для банку '{bank_name}'</b>\n\n"
+    text += "Введіть короткий опис банку (особливості, переваги тощо) або натисніть кнопку 'Пропустити':"
+
+    keyboard = [[InlineKeyboardButton("⏭️ Пропустити", callback_data="skip_description")]]
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    
+    return BANK_DESCRIPTION_INPUT
+
+async def bank_description_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle bank description input"""
+    if update.callback_query and update.callback_query.data == "skip_description":
+        await update.callback_query.answer()
+        context.user_data['new_bank_description'] = None
+    else:
+        description = update.message.text.strip() if update.message else None
+        if not description:
+            await update.message.reply_text("❌ Будь ласка, введіть опис або натисніть 'Пропустити'")
+            return BANK_DESCRIPTION_INPUT
+        context.user_data['new_bank_description'] = description
+
+    # Now move to settings
+    bank_name = context.user_data.get('new_bank_name', 'Unknown')
+    price = context.user_data.get('new_bank_price')
+    description = context.user_data.get('new_bank_description')
 
     keyboard = [
         [InlineKeyboardButton("✅ Реєстрація", callback_data="bank_reg_yes"),
@@ -114,14 +176,22 @@ async def bank_name_input_handler(update: Update, context: ContextTypes.DEFAULT_
     ]
 
     text = f"🏦 <b>Налаштування банку '{bank_name}'</b>\n\n"
-    text += "Реєстрація: ✅ Увімкнена\n"
+    if price:
+        text += f"💰 Ціна: {price}\n"
+    if description:
+        text += f"📝 Опис: {description}\n"
+    text += "\nРеєстрація: ✅ Увімкнена\n"
     text += "Перев'язка: ✅ Увімкнена\n\n"
     text += "Змініть налаштування або збережіть банк:"
 
     context.user_data['bank_register_enabled'] = True
     context.user_data['bank_change_enabled'] = True
 
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    
     return BANK_SETTINGS_INPUT
 
 async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -144,8 +214,10 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
         # Save the bank
         register_enabled = context.user_data.get('bank_register_enabled', True)
         change_enabled = context.user_data.get('bank_change_enabled', True)
+        price = context.user_data.get('new_bank_price')
+        description = context.user_data.get('new_bank_description')
 
-        if add_bank(bank_name, register_enabled, change_enabled):
+        if add_bank(bank_name, register_enabled, change_enabled, price, description):
             text = f"✅ Банк '{bank_name}' успішно додано!"
             log_action(0, f"admin_{update.effective_user.id}", "add_bank", bank_name)
         else:
@@ -155,6 +227,8 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Clear user data
         context.user_data.pop('new_bank_name', None)
+        context.user_data.pop('new_bank_price', None)
+        context.user_data.pop('new_bank_description', None)
         context.user_data.pop('bank_register_enabled', None)
         context.user_data.pop('bank_change_enabled', None)
 
@@ -163,9 +237,15 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
     # Update display
     register_status = "✅ Увімкнена" if context.user_data.get('bank_register_enabled', True) else "❌ Вимкнена"
     change_status = "✅ Увімкнена" if context.user_data.get('bank_change_enabled', True) else "❌ Вимкнена"
+    price = context.user_data.get('new_bank_price')
+    description = context.user_data.get('new_bank_description')
 
     text = f"🏦 <b>Налаштування банку '{bank_name}'</b>\n\n"
-    text += f"Реєстрація: {register_status}\n"
+    if price:
+        text += f"💰 Ціна: {price}\n"
+    if description:
+        text += f"📝 Опис: {description}\n"
+    text += f"\nРеєстрація: {register_status}\n"
     text += f"Перев'язка: {change_status}\n\n"
     text += "Змініть налаштування або збережіть банк:"
 
@@ -262,7 +342,7 @@ async def edit_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "✏️ <b>Редагувати банк</b>\n\nОберіть банк для редагування:"
         keyboard = []
-        for name, is_active, register_enabled, change_enabled in banks:
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
             status = "✅" if is_active else "❌"
             keyboard.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"edit_bank_{name}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")])
@@ -285,7 +365,7 @@ async def delete_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         text = "🗑️ <b>Видалити банк</b>\n\n⚠️ <b>Увага!</b> Видалення банку призведе до видалення всіх його інструкцій.\n\nОберіть банк для видалення:"
         keyboard = []
-        for name, is_active, register_enabled, change_enabled in banks:
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
             keyboard.append([InlineKeyboardButton(f"🗑️ {name}", callback_data=f"delete_bank_{name}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")])
 
@@ -305,16 +385,16 @@ async def edit_bank_settings_handler(update: Update, context: ContextTypes.DEFAU
     # Get current bank settings
     banks = get_banks()
     bank_data = None
-    for name, is_active, register_enabled, change_enabled in banks:
+    for name, is_active, register_enabled, change_enabled, price, description in banks:
         if name == bank_name:
-            bank_data = (is_active, register_enabled, change_enabled)
+            bank_data = (is_active, register_enabled, change_enabled, price, description)
             break
     
     if not bank_data:
         await query.edit_message_text("❌ Банк не знайдено")
         return
 
-    is_active, register_enabled, change_enabled = bank_data
+    is_active, register_enabled, change_enabled, price, description = bank_data
     
     active_status = "✅ Активний" if is_active else "❌ Неактивний"
     register_status = "✅ Увімкнена" if register_enabled else "❌ Вимкнена"
@@ -323,13 +403,19 @@ async def edit_bank_settings_handler(update: Update, context: ContextTypes.DEFAU
     text = f"✏️ <b>Редагування банку '{bank_name}'</b>\n\n"
     text += f"Статус: {active_status}\n"
     text += f"Реєстрація: {register_status}\n"
-    text += f"Перев'язка: {change_status}\n\n"
-    text += "Що бажаєте змінити?"
+    text += f"Перев'язка: {change_status}\n"
+    if price:
+        text += f"💰 Ціна: {price}\n"
+    if description:
+        text += f"📝 Опис: {description}\n"
+    text += "\nЩо бажаєте змінити?"
 
     keyboard = [
         [InlineKeyboardButton("🔄 Статус банку", callback_data=f"toggle_active_{bank_name}")],
         [InlineKeyboardButton("📝 Реєстрація", callback_data=f"toggle_register_{bank_name}")],
         [InlineKeyboardButton("🔗 Перев'язка", callback_data=f"toggle_change_{bank_name}")],
+        [InlineKeyboardButton("💰 Змінити ціну", callback_data=f"edit_price_{bank_name}")],
+        [InlineKeyboardButton("📝 Змінити опис", callback_data=f"edit_description_{bank_name}")],
         [InlineKeyboardButton("🔙 Назад", callback_data="banks_edit")]
     ]
 
@@ -350,7 +436,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_active = None
-        for name, is_active, _, _ in banks:
+        for name, is_active, _, _, _, _ in banks:
             if name == bank_name:
                 current_active = is_active
                 break
@@ -369,7 +455,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_register = None
-        for name, _, register_enabled, _ in banks:
+        for name, _, register_enabled, _, _, _ in banks:
             if name == bank_name:
                 current_register = register_enabled
                 break
@@ -388,7 +474,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_change = None
-        for name, _, _, change_enabled in banks:
+        for name, _, _, change_enabled, _, _ in banks:
             if name == bank_name:
                 current_change = change_enabled
                 break
@@ -401,6 +487,63 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
                 log_action(0, f"admin_{update.effective_user.id}", "toggle_bank_change", f"{bank_name}:{status}")
             else:
                 await query.edit_message_text(f"❌ Помилка при зміні налаштувань перев'язки для банку '{bank_name}'")
+    
+    elif data.startswith("edit_price_"):
+        bank_name = data.replace("edit_price_", "")
+        context.user_data['editing_bank'] = bank_name
+        context.user_data['editing_field'] = 'price'
+        
+        text = f"💰 <b>Зміна ціни для банку '{bank_name}'</b>\n\n"
+        text += "Введіть нову ціну банку (наприклад: '500 грн', '20$', 'безкоштовно'):"
+        
+        await query.edit_message_text(text, parse_mode='HTML')
+        # This would need a separate conversation handler or we can use a simpler approach
+        # For now, let's make it a simple text edit
+        
+    elif data.startswith("edit_description_"):
+        bank_name = data.replace("edit_description_", "")
+        context.user_data['editing_bank'] = bank_name
+        context.user_data['editing_field'] = 'description'
+        
+        text = f"📝 <b>Зміна опису для банку '{bank_name}'</b>\n\n"
+        text += "Введіть новий опис банку:"
+        
+        await query.edit_message_text(text, parse_mode='HTML')
+        # This would need a separate conversation handler or we can use a simpler approach
+
+async def update_bank_field_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle updating bank field via text message"""
+    if not update.message or not update.message.text:
+        return
+        
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+        
+    editing_bank = context.user_data.get('editing_bank')
+    editing_field = context.user_data.get('editing_field')
+    
+    if not editing_bank or not editing_field:
+        return
+        
+    new_value = update.message.text.strip()
+    
+    if editing_field == 'price':
+        if update_bank(editing_bank, price=new_value):
+            await update.message.reply_text(f"✅ Ціну банку '{editing_bank}' змінено на: {new_value}")
+            log_action(0, f"admin_{user_id}", "update_bank_price", f"{editing_bank}:{new_value}")
+        else:
+            await update.message.reply_text(f"❌ Помилка при зміні ціни банку '{editing_bank}'")
+    elif editing_field == 'description':
+        if update_bank(editing_bank, description=new_value):
+            await update.message.reply_text(f"✅ Опис банку '{editing_bank}' змінено на: {new_value}")
+            log_action(0, f"admin_{user_id}", "update_bank_description", f"{editing_bank}:{new_value}")
+        else:
+            await update.message.reply_text(f"❌ Помилка при зміні опису банку '{editing_bank}'")
+    
+    # Clear editing state
+    context.user_data.pop('editing_bank', None)
+    context.user_data.pop('editing_field', None)
 
 async def confirm_delete_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle bank deletion confirmation"""
@@ -638,6 +781,65 @@ async def final_delete_group_handler(update: Update, context: ContextTypes.DEFAU
         text = f"❌ Помилка при видаленні групи: {e}"
 
     await query.edit_message_text(text)
+
+async def form_templates_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Form templates management menu"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("📋 Переглянути шаблони", callback_data="form_templates_list")],
+        [InlineKeyboardButton("➕ Створити шаблон", callback_data="form_templates_create")],
+        [InlineKeyboardButton("✏️ Редагувати шаблон", callback_data="form_templates_edit")],
+        [InlineKeyboardButton("🗑️ Видалити шаблон", callback_data="form_templates_delete")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")]
+    ]
+
+    text = "📋 <b>Управління шаблонами анкет</b>\n\n"
+    text += "Тут ви можете керувати шаблонами анкет для банків:\n"
+    text += "• Переглянути існуючі шаблони\n"
+    text += "• Створити новий шаблон для банку\n"
+    text += "• Редагувати поля анкети\n"
+    text += "• Видаляти старі шаблони\n\n"
+    text += "Оберіть дію:"
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all form templates"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    from db import get_bank_form_template, get_banks
+
+    banks = get_banks()
+    
+    text = "📋 <b>Шаблони анкет банків</b>\n\n"
+    
+    if not banks:
+        text += "❌ Немає зареєстрованих банків"
+    else:
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
+            template = get_bank_form_template(name)
+            if template:
+                field_count = len(template.get('fields', []))
+                text += f"🏦 <b>{name}</b> - {field_count} полів\n"
+                for i, field in enumerate(template.get('fields', [])[:3], 1):  # Show first 3 fields
+                    text += f"   {i}. {field.get('name', 'Без назви')}\n"
+                if field_count > 3:
+                    text += f"   ... та ще {field_count - 3} полів\n"
+            else:
+                text += f"🏦 <b>{name}</b> - ❌ Немає шаблону\n"
+            text += "\n"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 # Utility function for handling conversation cancellation
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
