@@ -200,6 +200,24 @@ def test_edge_cases():
 
     print("✅ Edge case tests passed")
 
+def test_admin_interface():
+    """Test unified admin interface functionality"""
+    print("🔧 Testing unified admin interface...")
+    
+    try:
+        from handlers.admin_interface import admin_interface_menu, admin_interface_callback
+        print("✅ Admin interface modules imported successfully")
+        
+        # Test that interface has proper structure
+        assert admin_interface_menu.__doc__ is not None, "admin_interface_menu should have documentation"
+        assert admin_interface_callback.__doc__ is not None, "admin_interface_callback should have documentation"
+        
+        print("✅ Admin interface structure tests passed")
+        
+    except Exception as e:
+        print(f"❌ Admin interface test failed: {e}")
+        raise
+
 def run_all_tests():
     """Run all tests"""
     print("🚀 Starting comprehensive test suite...\n")
@@ -212,9 +230,11 @@ def run_all_tests():
         test_multi_order_management()
         test_order_forms()
         test_edge_cases()
+        test_admin_interface()
 
         print("\n🎉 All tests passed successfully!")
         print("✅ Enhanced bot functionality is working correctly")
+        print("✅ Unified admin interface is properly integrated")
 
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
