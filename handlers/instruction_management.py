@@ -323,7 +323,9 @@ async def sync_instructions_to_file_cmd(update: Update, context: ContextTypes.DE
             f"✅ Інструкції синхронізовано!\n\n"
             f"📁 Файл: instructions_generated.py\n"
             f"🏦 Банків: {len(instructions_data)}\n\n"
-            f"Щоб використати, замініть imports в коді:\n"
+            f"📝 <b>Примітка:</b> Бот тепер використовує БД як основне джерело інструкцій.\n"
+            f"Цей snapshot файл створено для резервного копіювання (опціонально).\n"
+            f"Для використання замініть imports в коді:\n"
             f"<code>from instructions_generated import INSTRUCTIONS</code>",
             parse_mode='HTML'
         )
