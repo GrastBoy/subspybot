@@ -1,3 +1,6 @@
+import os
+
+from dotenv import load_dotenv
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -46,9 +49,6 @@ from handlers.stage2_router import build_stage2_handlers
 from handlers.status_handler import status
 from states import COOPERATION_INPUT, MANAGER_MESSAGE, REJECT_REASON
 
-from dotenv import load_dotenv
-import os
-
 load_dotenv()
 
 
@@ -94,16 +94,16 @@ def main():
 
     # Bank management conversation
     from handlers.bank_management import (
+        BANK_DESCRIPTION_INPUT,
         BANK_NAME_INPUT,
         BANK_PRICE_INPUT,
-        BANK_DESCRIPTION_INPUT,
         BANK_SETTINGS_INPUT,
         add_admin_group_handler,
         add_bank_group_handler,
         add_bank_handler,
+        bank_description_input_handler,
         bank_name_input_handler,
         bank_price_input_handler,
-        bank_description_input_handler,
         bank_settings_handler,
         banks_management_menu,
         cancel_conversation,
@@ -115,8 +115,8 @@ def main():
         edit_bank_settings_handler,
         final_delete_bank_handler,
         final_delete_group_handler,
-        form_templates_menu_handler,
         form_templates_list_handler,
+        form_templates_menu_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
@@ -136,7 +136,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bank_description_input_handler),
                 CallbackQueryHandler(bank_description_input_handler, pattern="^skip_description$")
             ],
-            BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_reg_|bank_change_|bank_save).*$")]
+            BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bm_reg_|bm_change_|bm_save).*$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
         per_chat=True

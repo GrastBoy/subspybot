@@ -88,6 +88,11 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Некоректний вибір. Спробуйте ще раз.")
             return
 
+        # Defensive guard: only process user order flow bank_ callbacks
+        if action not in ("register", "change"):
+            await query.edit_message_text("❌ Некоректний вибір. Спробуйте ще раз.")
+            return
+
         user_id = query.from_user.id
         age_required = find_age_requirement(bank, action)
         user_states[user_id] = {"order_id": None, "bank": bank, "action": action, "stage": 0, "age_required": age_required}
