@@ -448,8 +448,9 @@ async def banks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vis = {b: (sr, sc) for b, sr, sc in rows}
 
     try:
-        from states import INSTRUCTIONS
-        all_banks = sorted(set(INSTRUCTIONS.keys()) | set(vis.keys()))
+        from states import get_instructions
+        instructions = get_instructions()
+        all_banks = sorted(set(instructions.keys()) | set(vis.keys()))
     except Exception:
         all_banks = sorted(set(vis.keys()))
 
