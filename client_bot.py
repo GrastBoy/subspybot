@@ -60,7 +60,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(main_menu_handler, pattern="^(menu_banks|menu_info|back_to_main|type_register|type_change|bank_.*)$"))
+    app.add_handler(CallbackQueryHandler(main_menu_handler, pattern="^(menu_banks|menu_info|back_to_main|type_register|type_change|bank_[^_]+_(register|change))$"))
     app.add_handler(CallbackQueryHandler(age_confirm_handler, pattern="^age_confirm_.*$"))
 
     # Фото етап (Stage1)
@@ -117,6 +117,13 @@ def main():
         final_delete_group_handler,
         form_templates_menu_handler,
         form_templates_list_handler,
+        form_templates_create_handler,
+        form_templates_edit_handler,
+        form_templates_delete_handler,
+        create_template_handler,
+        edit_template_handler_specific,
+        delete_template_handler_specific,
+        confirm_delete_template_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
@@ -165,6 +172,15 @@ def main():
     # Form template management
     app.add_handler(CallbackQueryHandler(form_templates_menu_handler, pattern="^form_templates_menu$"))
     app.add_handler(CallbackQueryHandler(form_templates_list_handler, pattern="^form_templates_list$"))
+    app.add_handler(CallbackQueryHandler(form_templates_create_handler, pattern="^form_templates_create$"))
+    app.add_handler(CallbackQueryHandler(form_templates_edit_handler, pattern="^form_templates_edit$"))
+    app.add_handler(CallbackQueryHandler(form_templates_delete_handler, pattern="^form_templates_delete$"))
+    
+    # Specific template operations
+    app.add_handler(CallbackQueryHandler(create_template_handler, pattern="^create_template_.*$"))
+    app.add_handler(CallbackQueryHandler(edit_template_handler_specific, pattern="^edit_template_.*$"))
+    app.add_handler(CallbackQueryHandler(delete_template_handler_specific, pattern="^delete_template_.*$"))
+    app.add_handler(CallbackQueryHandler(confirm_delete_template_handler, pattern="^confirm_delete_template_.*$"))
 
     # Instruction management conversation
     from handlers.instruction_management import (
