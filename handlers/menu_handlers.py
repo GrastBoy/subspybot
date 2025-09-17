@@ -10,20 +10,21 @@ def _banks_from_instructions(action: str):
     return [bank for bank, actions in INSTRUCTIONS.items() if action in actions and actions[action]]
 
 def _get_visible_banks(action: str):
-    banks = _banks_from_instructions(action)
-    try:
-        cursor.execute("SELECT bank, show_register, show_change FROM bank_visibility")
-        rows = cursor.fetchall()
-        vis = {b: (sr, sc) for b, sr, sc in rows}
-    except Exception:
-        vis = {}
+    """Get banks that are visible for the specified action from database"""
+    from db import get_banks
+    
+    banks = get_banks()
     result = []
-    for bank in banks:
-        sr, sc = vis.get(bank, (1, 1))
-        if action == "register" and sr:
-            result.append(bank)
-        if action == "change" and sc:
-            result.append(bank)
+    
+    for name, is_active, register_enabled, change_enabled, price, description in banks:
+        if not is_active:  # Skip inactive banks
+            continue
+            
+        if action == "register" and register_enabled:
+            result.append(name)
+        elif action == "change" and change_enabled:
+            result.append(name)
+    
     return result
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

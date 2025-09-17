@@ -124,6 +124,7 @@ def main():
         list_banks_handler,
         list_groups_handler,
         select_bank_for_group_handler,
+        sync_to_file_handler,
         toggle_bank_setting_handler,
     )
     conv_bank_management = ConversationHandler(
@@ -155,6 +156,7 @@ def main():
     app.add_handler(CallbackQueryHandler(confirm_delete_bank_handler, pattern="^delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(final_delete_bank_handler, pattern="^confirm_delete_bank_.*$"))
     app.add_handler(CallbackQueryHandler(instructions_menu_handler, pattern="^instructions_menu$"))
+    app.add_handler(CallbackQueryHandler(sync_to_file_handler, pattern="^sync_to_file$"))
     app.add_handler(CallbackQueryHandler(groups_menu_handler, pattern="^groups_menu$"))
     app.add_handler(CallbackQueryHandler(list_groups_handler, pattern="^groups_list$"))
     app.add_handler(CallbackQueryHandler(add_bank_group_handler, pattern="^groups_add_bank$"))

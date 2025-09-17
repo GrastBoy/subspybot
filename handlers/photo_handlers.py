@@ -671,7 +671,33 @@ async def send_instruction(user_id: int, context, order_id: int = None):
             "age_required": find_age_requirement(bank, action)
         }
 
-    steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+    # Get steps from database first, fallback to INSTRUCTIONS
+    from db import get_bank_instructions
+    
+    try:
+        db_instructions = get_bank_instructions(bank, action)
+        steps = []
+        for instruction in db_instructions:
+            # Convert database format to old format for compatibility
+            step_data = {
+                "text": instruction[1] if len(instruction) > 1 else "",
+                "images": [],
+                "age": instruction[3] if len(instruction) > 3 else None,
+                "required_photos": instruction[4] if len(instruction) > 4 else None
+            }
+            
+            # Parse images if available
+            if len(instruction) > 2 and instruction[2]:
+                try:
+                    import json
+                    step_data["images"] = json.loads(instruction[2]) if isinstance(instruction[2], str) else instruction[2]
+                except:
+                    step_data["images"] = []
+            
+            steps.append(step_data)
+    except Exception as e:
+        logger.warning(f"Failed to get instructions from database for {bank}/{action}: {e}")
+        steps = INSTRUCTIONS.get(bank, {}).get(action, [])
 
     # Stage2 тригер: як тільки ми закінчили перший крок (stage0 >= 1), але Stage2 ще не завершено
     if stage0 >= 1 and not stage2_complete:

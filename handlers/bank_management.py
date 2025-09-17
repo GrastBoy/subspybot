@@ -949,3 +949,101 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Cancel any active conversation"""
     await update.message.reply_text("❌ Операцію скасовано")
     return ConversationHandler.END
+
+async def sync_to_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sync instructions from database to instructions.py file"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        from db import get_banks, get_bank_instructions
+        import json
+        
+        banks = get_banks()
+        instructions_data = {}
+        
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
+            if not is_active:
+                continue
+                
+            bank_instructions = {}
+            
+            if register_enabled:
+                register_instructions = get_bank_instructions(name, "register")
+                bank_instructions["register"] = []
+                
+                for instruction in register_instructions:
+                    step_data = {
+                        "text": instruction[1] if len(instruction) > 1 else "",
+                        "images": []
+                    }
+                    
+                    if len(instruction) > 3 and instruction[3] is not None:
+                        step_data["age"] = instruction[3]
+                    
+                    if len(instruction) > 4 and instruction[4] is not None:
+                        step_data["required_photos"] = instruction[4]
+                    
+                    if len(instruction) > 2 and instruction[2]:
+                        try:
+                            step_data["images"] = json.loads(instruction[2]) if isinstance(instruction[2], str) else instruction[2]
+                        except:
+                            step_data["images"] = []
+                    
+                    bank_instructions["register"].append(step_data)
+            
+            if change_enabled:
+                change_instructions = get_bank_instructions(name, "change")
+                bank_instructions["change"] = []
+                
+                for instruction in change_instructions:
+                    step_data = {
+                        "text": instruction[1] if len(instruction) > 1 else "",
+                        "images": []
+                    }
+                    
+                    if len(instruction) > 3 and instruction[3] is not None:
+                        step_data["age"] = instruction[3]
+                    
+                    if len(instruction) > 4 and instruction[4] is not None:
+                        step_data["required_photos"] = instruction[4]
+                    
+                    if len(instruction) > 2 and instruction[2]:
+                        try:
+                            step_data["images"] = json.loads(instruction[2]) if isinstance(instruction[2], str) else instruction[2]
+                        except:
+                            step_data["images"] = []
+                    
+                    bank_instructions["change"].append(step_data)
+            
+            if bank_instructions:
+                instructions_data[name] = bank_instructions
+        
+        # Write to instructions.py file
+        with open('/home/runner/work/subspybot/subspybot/instructions.py', 'w', encoding='utf-8') as f:
+            f.write('INSTRUCTIONS = ')
+            f.write(json.dumps(instructions_data, ensure_ascii=False, indent=4))
+            f.write('\n')
+        
+        text = f"✅ Інструкції синхронізовано до файлу!\n\n"
+        text += f"Оброблено банків: {len(instructions_data)}\n"
+        
+        for bank_name, actions in instructions_data.items():
+            text += f"• {bank_name}: "
+            if "register" in actions:
+                text += f"реєстрація ({len(actions['register'])} кроків) "
+            if "change" in actions:
+                text += f"перев'язка ({len(actions['change'])} кроків)"
+            text += "\n"
+        
+        log_action(0, f"admin_{update.effective_user.id}", "sync_instructions", f"synced {len(instructions_data)} banks")
+        
+    except Exception as e:
+        text = f"❌ Помилка при синхронізації: {e}"
+        logger.error(f"Sync to file error: {e}")
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="instructions_menu")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
