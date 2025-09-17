@@ -6,7 +6,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from db import ADMIN_GROUP_ID, conn, cursor, logger
-from states import INSTRUCTIONS, MANAGER_MESSAGE, REJECT_REASON, find_age_requirement, get_required_photos, user_states
+from states import MANAGER_MESSAGE, REJECT_REASON, find_age_requirement, get_required_photos, user_states
+from services.instructions import get_instructions
 
 # Debounce/aggregation for photo albums and series
 DEBOUNCE_SECONDS = 1.8
@@ -671,7 +672,9 @@ async def send_instruction(user_id: int, context, order_id: int = None):
             "age_required": find_age_requirement(bank, action)
         }
 
-    steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+    # Get fresh instructions from DB each time
+    instructions = get_instructions()
+    steps = instructions.get(bank, {}).get(action, [])
 
     # Stage2 тригер: як тільки ми закінчили перший крок (stage0 >= 1), але Stage2 ще не завершено
     if stage0 >= 1 and not stage2_complete:
