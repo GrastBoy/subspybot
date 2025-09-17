@@ -337,3 +337,68 @@ async def cancel_instruction_conversation(update: Update, context: ContextTypes.
     """Cancel instruction management conversation"""
     await update.message.reply_text("❌ Управління інструкціями скасовано")
     return ConversationHandler.END
+
+async def migrate_instructions_from_file_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Migrate instructions from instructions.py to database"""
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Немає доступу")
+
+    try:
+        from instructions import INSTRUCTIONS
+        from db import add_bank, cursor, conn
+        
+        migrated_banks = 0
+        migrated_instructions = 0
+        
+        await update.message.reply_text("🔄 Починаю міграцію з instructions.py...")
+        
+        for bank_name, actions in INSTRUCTIONS.items():
+            # First, ensure the bank exists in the database
+            cursor.execute("SELECT name FROM banks WHERE name=?", (bank_name,))
+            if not cursor.fetchone():
+                # Determine which actions are available for the bank
+                has_register = 'register' in actions
+                has_change = 'change' in actions
+                
+                # Add the bank with default settings
+                if add_bank(bank_name, has_register, has_change, None, f"Мігровано з файлу інструкцій"):
+                    migrated_banks += 1
+                    logger.info(f"Added bank {bank_name}")
+            
+            # Migrate instructions for each action
+            for action, instructions_list in actions.items():
+                for step_num, instruction in enumerate(instructions_list, 1):
+                    instruction_text = instruction.get('text', '')
+                    instruction_images = instruction.get('images', [])
+                    age_requirement = instruction.get('age')
+                    
+                    # Add instruction to database
+                    if add_bank_instruction(
+                        bank_name=bank_name,
+                        action=action,
+                        step_number=step_num,
+                        instruction_text=instruction_text,
+                        instruction_images=instruction_images,
+                        age_requirement=age_requirement,
+                        required_photos=1  # Default value
+                    ):
+                        migrated_instructions += 1
+                        logger.info(f"Added instruction {bank_name} {action} step {step_num}")
+        
+        # Log the migration
+        log_action(0, f"admin_{update.effective_user.id}", "migrate_instructions", 
+                  f"{migrated_banks} banks, {migrated_instructions} instructions")
+        
+        text = f"✅ <b>Міграція завершена!</b>\n\n"
+        text += f"🏦 Банків додано: {migrated_banks}\n"
+        text += f"📝 Інструкцій мігровано: {migrated_instructions}\n\n"
+        text += "Тепер ви можете керувати всіма банками та інструкціями через адмін панель!\n\n"
+        text += "💡 <i>Рекомендується зробити резервну копію instructions.py перед його видаленням.</i>"
+        
+        await update.message.reply_text(text, parse_mode='HTML')
+        
+    except ImportError:
+        await update.message.reply_text("❌ Файл instructions.py не знайдено")
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
+        await update.message.reply_text(f"❌ Помилка при міграції: {e}")

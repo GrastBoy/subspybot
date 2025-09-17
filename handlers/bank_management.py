@@ -43,7 +43,8 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("🗑️ Видалити банк", callback_data="banks_delete")],
         [InlineKeyboardButton("📝 Управління інструкціями", callback_data="instructions_menu")],
         [InlineKeyboardButton("📋 Шаблони анкет", callback_data="form_templates_menu")],
-        [InlineKeyboardButton("👥 Управління групами", callback_data="groups_menu")]
+        [InlineKeyboardButton("👥 Управління групами", callback_data="groups_menu")],
+        [InlineKeyboardButton("🔙 Назад до головного меню", callback_data="back_to_admin")]
     ]
 
     text = "🏦 <b>Управління банками</b>\n\nОберіть дію:"
@@ -233,6 +234,10 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop('bank_change_enabled', None)
 
         return ConversationHandler.END
+    else:
+        # Handle unexpected callback data
+        await query.answer("❌ Некоректний вибір", show_alert=True)
+        return BANK_SETTINGS_INPUT
 
     # Update display
     register_status = "✅ Увімкнена" if context.user_data.get('bank_register_enabled', True) else "❌ Вимкнена"
@@ -272,7 +277,8 @@ async def instructions_menu_handler(update: Update, context: ContextTypes.DEFAUL
         [InlineKeyboardButton("📋 Переглянути інструкції", callback_data="instructions_list")],
         [InlineKeyboardButton("➕ Додати інструкцію", callback_data="instructions_add")],
         [InlineKeyboardButton("🔄 Синхронізувати в файл", callback_data="sync_to_file")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")]
+        [InlineKeyboardButton("📥 Мігрувати з файлу", callback_data="migrate_from_file")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_admin")]
     ]
 
     text = "📝 <b>Управління інструкціями</b>\n\n"
@@ -795,7 +801,7 @@ async def form_templates_menu_handler(update: Update, context: ContextTypes.DEFA
         [InlineKeyboardButton("➕ Створити шаблон", callback_data="form_templates_create")],
         [InlineKeyboardButton("✏️ Редагувати шаблон", callback_data="form_templates_edit")],
         [InlineKeyboardButton("🗑️ Видалити шаблон", callback_data="form_templates_delete")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")]
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_admin")]
     ]
 
     text = "📋 <b>Управління шаблонами анкет</b>\n\n"
@@ -840,6 +846,272 @@ async def form_templates_list_handler(update: Update, context: ContextTypes.DEFA
 
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_create_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create new form template for a bank"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    banks = get_banks()
+    
+    if not banks:
+        text = "➕ <b>Створити шаблон</b>\n\n❌ Немає зареєстрованих банків.\nСпочатку додайте банк."
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+    else:
+        text = "➕ <b>Створити шаблон анкети</b>\n\nОберіть банк для якого створити шаблон:"
+        keyboard = []
+        for name, is_active, _, _, _, _ in banks:
+            keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"create_template_{name}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_edit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Edit existing form template"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    banks = get_banks()
+    
+    if not banks:
+        text = "✏️ <b>Редагувати шаблон</b>\n\n❌ Немає зареєстрованих банків."
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+    else:
+        text = "✏️ <b>Редагувати шаблон анкети</b>\n\nОберіть банк для редагування шаблону:"
+        keyboard = []
+        has_templates = False
+        
+        for name, is_active, _, _, _, _ in banks:
+            template = get_bank_form_template(name)
+            if template:
+                has_templates = True
+                field_count = len(template.get('fields', []))
+                keyboard.append([InlineKeyboardButton(f"🏦 {name} ({field_count} полів)", callback_data=f"edit_template_{name}")])
+        
+        if not has_templates:
+            text = "✏️ <b>Редагувати шаблон</b>\n\n❌ Немає шаблонів для редагування.\nСпочатку створіть шаблон."
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete form template"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    banks = get_banks()
+    
+    if not banks:
+        text = "🗑️ <b>Видалити шаблон</b>\n\n❌ Немає зареєстрованих банків."
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+    else:
+        text = "🗑️ <b>Видалити шаблон анкети</b>\n\nОберіть банк для видалення шаблону:"
+        keyboard = []
+        has_templates = False
+        
+        for name, is_active, _, _, _, _ in banks:
+            template = get_bank_form_template(name)
+            if template:
+                has_templates = True
+                field_count = len(template.get('fields', []))
+                keyboard.append([InlineKeyboardButton(f"🗑️ {name} ({field_count} полів)", callback_data=f"delete_template_{name}")])
+        
+        if not has_templates:
+            text = "🗑️ <b>Видалити шаблон</b>\n\n❌ Немає шаблонів для видалення."
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def create_template_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle creation of template for specific bank"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract bank name from callback data
+    bank_name = query.data.replace("create_template_", "")
+    
+    # Check if template already exists
+    existing_template = get_bank_form_template(bank_name)
+    if existing_template:
+        text = f"⚠️ <b>Шаблон вже існує</b>\n\nДля банку '{bank_name}' вже є шаблон з {len(existing_template.get('fields', []))} полями.\n\nЩо бажаєте зробити?"
+        keyboard = [
+            [InlineKeyboardButton("✏️ Редагувати існуючий", callback_data=f"edit_template_{bank_name}")],
+            [InlineKeyboardButton("🗑️ Видалити і створити новий", callback_data=f"recreate_template_{bank_name}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="form_templates_create")]
+        ]
+    else:
+        # Create basic template structure
+        template_data = {
+            'fields': [
+                {'name': 'ПІБ', 'type': 'text', 'required': True},
+                {'name': 'Телефон', 'type': 'phone', 'required': True},
+                {'name': 'Email', 'type': 'email', 'required': False}
+            ],
+            'created_by': update.effective_user.id,
+            'bank': bank_name
+        }
+        
+        if set_bank_form_template(bank_name, template_data):
+            text = f"✅ <b>Шаблон створено!</b>\n\nДля банку '{bank_name}' створено базовий шаблон з полями:\n"
+            text += "• ПІБ (обов'язкове)\n• Телефон (обов'язкове)\n• Email (необов'язкове)\n\n"
+            text += "Ви можете відредагувати шаблон для додавання додаткових полів."
+            log_action(0, f"admin_{update.effective_user.id}", "create_template", bank_name)
+        else:
+            text = f"❌ <b>Помилка!</b>\n\nНе вдалося створити шаблон для банку '{bank_name}'"
+        
+        keyboard = [
+            [InlineKeyboardButton("✏️ Редагувати шаблон", callback_data=f"edit_template_{bank_name}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="form_templates_create")]
+        ]
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def edit_template_handler_specific(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle editing of template for specific bank"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract bank name from callback data
+    bank_name = query.data.replace("edit_template_", "")
+    
+    template = get_bank_form_template(bank_name)
+    if not template:
+        text = f"❌ <b>Шаблон не знайдено</b>\n\nДля банку '{bank_name}' немає шаблону."
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_edit")]]
+    else:
+        fields = template.get('fields', [])
+        text = f"✏️ <b>Редагування шаблону для '{bank_name}'</b>\n\n"
+        text += f"Поточні поля ({len(fields)}):\n"
+        
+        for i, field in enumerate(fields, 1):
+            required = "⭐" if field.get('required', False) else "○"
+            text += f"{i}. {required} {field.get('name', 'Без назви')} ({field.get('type', 'text')})\n"
+        
+        text += "\nОберіть дію:"
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ Додати поле", callback_data=f"add_field_{bank_name}")],
+            [InlineKeyboardButton("🗑️ Видалити поле", callback_data=f"remove_field_{bank_name}")],
+            [InlineKeyboardButton("📋 Переглянути JSON", callback_data=f"view_template_{bank_name}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="form_templates_edit")]
+        ]
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def delete_template_handler_specific(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle deletion of template for specific bank"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract bank name from callback data
+    bank_name = query.data.replace("delete_template_", "")
+    
+    template = get_bank_form_template(bank_name)
+    if not template:
+        text = f"❌ <b>Шаблон не знайдено</b>\n\nДля банку '{bank_name}' немає шаблону для видалення."
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_delete")]]
+    else:
+        field_count = len(template.get('fields', []))
+        text = f"🗑️ <b>Видалити шаблон</b>\n\n"
+        text += f"Ви впевнені, що хочете видалити шаблон для банку '{bank_name}'?\n\n"
+        text += f"Шаблон містить {field_count} полів:\n"
+        
+        for i, field in enumerate(template.get('fields', [])[:5], 1):  # Show first 5 fields
+            text += f"• {field.get('name', 'Без назви')}\n"
+        
+        if field_count > 5:
+            text += f"• ... та ще {field_count - 5} полів\n"
+        
+        text += "\n⚠️ Ця дія незворотна!"
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Так, видалити", callback_data=f"confirm_delete_template_{bank_name}")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="form_templates_delete")]
+        ]
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def confirm_delete_template_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm and execute template deletion"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Extract bank name from callback data
+    bank_name = query.data.replace("confirm_delete_template_", "")
+    
+    if delete_bank_form_template(bank_name):
+        text = f"✅ <b>Шаблон видалено!</b>\n\nШаблон для банку '{bank_name}' успішно видалено."
+        log_action(0, f"admin_{update.effective_user.id}", "delete_template", bank_name)
+    else:
+        text = f"❌ <b>Помилка!</b>\n\nНе вдалося видалити шаблон для банку '{bank_name}'"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад до шаблонів", callback_data="form_templates_menu")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def migrate_from_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle migration from file callback"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    text = "📥 <b>Міграція з файлу instructions.py</b>\n\n"
+    text += "Ця функція перенесе всі банки та інструкції з файлу instructions.py до бази даних.\n\n"
+    text += "⚠️ <b>Увага:</b>\n"
+    text += "• Банки, які вже існують, не будуть перезаписані\n"
+    text += "• Інструкції будуть додані до існуючих\n"
+    text += "• Процес незворотний\n\n"
+    text += "Продовжити міграцію?"
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Так, мігрувати", callback_data="confirm_migrate_from_file")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="instructions_menu")]
+    ]
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def confirm_migrate_from_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm and execute migration from file"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Call the migration function from instruction_management
+    from handlers.instruction_management import migrate_instructions_from_file_cmd
+    
+    # Convert callback query to a message-like update for the command handler
+    update.message = type('obj', (object,), {
+        'reply_text': lambda text, parse_mode=None: query.edit_message_text(text, parse_mode=parse_mode)
+    })()
+    
+    await migrate_instructions_from_file_cmd(update, context)
 
 # Utility function for handling conversation cancellation
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
