@@ -109,14 +109,16 @@ def main():
         cancel_conversation,
         confirm_delete_bank_handler,
         confirm_delete_group_handler,
+        create_template_for_bank_handler,
         delete_bank_handler,
         delete_group_handler,
         edit_bank_handler,
         edit_bank_settings_handler,
         final_delete_bank_handler,
         final_delete_group_handler,
-        form_templates_menu_handler,
+        form_templates_create_handler,
         form_templates_list_handler,
+        form_templates_menu_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
@@ -136,7 +138,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bank_description_input_handler),
                 CallbackQueryHandler(bank_description_input_handler, pattern="^skip_description$")
             ],
-            BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_reg_|bank_change_|bank_save).*$")]
+            BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_setting_|bank_setting_save).*$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
         per_chat=True
@@ -164,6 +166,9 @@ def main():
 
     # Form template management
     app.add_handler(CallbackQueryHandler(form_templates_menu_handler, pattern="^form_templates_menu$"))
+    app.add_handler(CallbackQueryHandler(form_templates_list_handler, pattern="^form_templates_list$"))
+    app.add_handler(CallbackQueryHandler(form_templates_create_handler, pattern="^form_templates_create$"))
+    app.add_handler(CallbackQueryHandler(create_template_for_bank_handler, pattern="^create_template_.*$"))
     app.add_handler(CallbackQueryHandler(form_templates_list_handler, pattern="^form_templates_list$"))
 
     # Instruction management conversation

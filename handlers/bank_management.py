@@ -43,7 +43,8 @@ async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("🗑️ Видалити банк", callback_data="banks_delete")],
         [InlineKeyboardButton("📝 Управління інструкціями", callback_data="instructions_menu")],
         [InlineKeyboardButton("📋 Шаблони анкет", callback_data="form_templates_menu")],
-        [InlineKeyboardButton("👥 Управління групами", callback_data="groups_menu")]
+        [InlineKeyboardButton("👥 Управління групами", callback_data="groups_menu")],
+        [InlineKeyboardButton("🔙 Назад до головного меню", callback_data="back_to_admin")]
     ]
 
     text = "🏦 <b>Управління банками</b>\n\nОберіть дію:"
@@ -202,15 +203,15 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     bank_name = context.user_data.get('new_bank_name', 'Unknown')
 
-    if data == "bank_reg_yes":
+    if data == "bank_setting_reg_yes":
         context.user_data['bank_register_enabled'] = True
-    elif data == "bank_reg_no":
+    elif data == "bank_setting_reg_no":
         context.user_data['bank_register_enabled'] = False
-    elif data == "bank_change_yes":
+    elif data == "bank_setting_change_yes":
         context.user_data['bank_change_enabled'] = True
-    elif data == "bank_change_no":
+    elif data == "bank_setting_change_no":
         context.user_data['bank_change_enabled'] = False
-    elif data == "bank_save":
+    elif data == "bank_setting_save":
         # Save the bank
         register_enabled = context.user_data.get('bank_register_enabled', True)
         change_enabled = context.user_data.get('bank_change_enabled', True)
@@ -807,6 +808,108 @@ async def form_templates_menu_handler(update: Update, context: ContextTypes.DEFA
     text += "Оберіть дію:"
 
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all form templates"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    from db import get_bank_form_template, get_banks
+
+    banks = get_banks()
+    
+    text = "📋 <b>Шаблони анкет банків</b>\n\n"
+    
+    if not banks:
+        text += "❌ Немає зареєстрованих банків"
+    else:
+        for name, is_active, register_enabled, change_enabled, price, description in banks:
+            template = get_bank_form_template(name)
+            if template:
+                text += f"✅ <b>{name}</b> - є шаблон\n"
+            else:
+                text += f"❌ <b>{name}</b> - немає шаблону\n"
+
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def form_templates_create_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create new form template"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    from db import get_banks
+
+    banks = get_banks()
+    
+    if not banks:
+        text = "❌ Спочатку додайте банки для створення шаблонів"
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "➕ <b>Створити шаблон анкети</b>\n\nОберіть банк для створення шаблону:"
+    
+    keyboard = []
+    for name, is_active, register_enabled, change_enabled, price, description in banks:
+        keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"create_template_{name}")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def create_template_for_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle template creation for specific bank"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if data.startswith("create_template_"):
+        bank_name = data.replace("create_template_", "")
+        
+        # Create basic template structure
+        template_data = {
+            "bank_name": bank_name,
+            "fields": [
+                {"name": "user_id", "label": "ID користувача", "type": "text", "required": True},
+                {"name": "username", "label": "Username", "type": "text", "required": True},
+                {"name": "phone_number", "label": "Номер телефону", "type": "phone", "required": True},
+                {"name": "email", "label": "Email адреса", "type": "email", "required": True},
+                {"name": "photos_count", "label": "Кількість фото", "type": "number", "required": True},
+                {"name": "action_type", "label": "Тип дії", "type": "text", "required": True},
+                {"name": "completion_date", "label": "Дата завершення", "type": "datetime", "required": True}
+            ],
+            "created_by": update.effective_user.id,
+            "created_at": "auto"
+        }
+        
+        from db import set_bank_form_template
+        
+        if set_bank_form_template(bank_name, template_data):
+            text = f"✅ Шаблон анкети для банку '{bank_name}' успішно створено!\n\n"
+            text += "Створені поля:\n"
+            for field in template_data["fields"]:
+                text += f"• {field['label']} ({field['type']})\n"
+            
+            log_action(0, f"admin_{update.effective_user.id}", "create_form_template", bank_name)
+        else:
+            text = f"❌ Помилка при створенні шаблону для банку '{bank_name}'"
+        
+        keyboard = [
+            [InlineKeyboardButton("📋 Переглянути шаблони", callback_data="form_templates_list")],
+            [InlineKeyboardButton("🔙 Назад до шаблонів", callback_data="form_templates_menu")]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 async def form_templates_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all form templates"""
