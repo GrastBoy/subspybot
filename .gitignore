@@ -33,8 +33,7 @@ venv.bak/
 
 # Environment files with secrets
 .env
-.env.*
-!.env.example
+!.env
 
 # Bot specific
 bot.lock

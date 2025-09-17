@@ -46,6 +46,11 @@ from handlers.stage2_router import build_stage2_handlers
 from handlers.status_handler import status
 from states import COOPERATION_INPUT, MANAGER_MESSAGE, REJECT_REASON
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 
 def main():
     if BOT_TOKEN in (""):
