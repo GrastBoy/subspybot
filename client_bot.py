@@ -124,6 +124,8 @@ def main():
         edit_template_handler_specific,
         delete_template_handler_specific,
         confirm_delete_template_handler,
+        migrate_from_file_handler,
+        confirm_migrate_from_file_handler,
         groups_menu_handler,
         instructions_menu_handler,
         list_banks_handler,
@@ -181,6 +183,8 @@ def main():
     app.add_handler(CallbackQueryHandler(edit_template_handler_specific, pattern="^edit_template_.*$"))
     app.add_handler(CallbackQueryHandler(delete_template_handler_specific, pattern="^delete_template_.*$"))
     app.add_handler(CallbackQueryHandler(confirm_delete_template_handler, pattern="^confirm_delete_template_.*$"))
+    app.add_handler(CallbackQueryHandler(migrate_from_file_handler, pattern="^migrate_from_file$"))
+    app.add_handler(CallbackQueryHandler(confirm_migrate_from_file_handler, pattern="^confirm_migrate_from_file$"))
 
     # Instruction management conversation
     from handlers.instruction_management import (
@@ -196,6 +200,7 @@ def main():
         instructions_list_handler,
         manage_bank_instructions_cmd,
         sync_instructions_to_file_cmd,
+        migrate_instructions_from_file_cmd,
     )
     conv_instruction_management = ConversationHandler(
         entry_points=[CallbackQueryHandler(instructions_add_handler, pattern="^instructions_add$")],
@@ -267,6 +272,7 @@ def main():
     app.add_handler(CommandHandler("active_orders", active_orders_cmd))
     app.add_handler(CommandHandler("manage_instructions", manage_bank_instructions_cmd))
     app.add_handler(CommandHandler("sync_instructions", sync_instructions_to_file_cmd))
+    app.add_handler(CommandHandler("migrate_instructions", migrate_instructions_from_file_cmd))
 
     # Unified Admin Interface
     from handlers.admin_interface import admin_interface_callback, admin_interface_menu

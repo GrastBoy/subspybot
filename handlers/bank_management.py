@@ -277,6 +277,7 @@ async def instructions_menu_handler(update: Update, context: ContextTypes.DEFAUL
         [InlineKeyboardButton("📋 Переглянути інструкції", callback_data="instructions_list")],
         [InlineKeyboardButton("➕ Додати інструкцію", callback_data="instructions_add")],
         [InlineKeyboardButton("🔄 Синхронізувати в файл", callback_data="sync_to_file")],
+        [InlineKeyboardButton("📥 Мігрувати з файлу", callback_data="migrate_from_file")],
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_admin")]
     ]
 
@@ -1070,6 +1071,47 @@ async def confirm_delete_template_handler(update: Update, context: ContextTypes.
     
     keyboard = [[InlineKeyboardButton("🔙 Назад до шаблонів", callback_data="form_templates_menu")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def migrate_from_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle migration from file callback"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    text = "📥 <b>Міграція з файлу instructions.py</b>\n\n"
+    text += "Ця функція перенесе всі банки та інструкції з файлу instructions.py до бази даних.\n\n"
+    text += "⚠️ <b>Увага:</b>\n"
+    text += "• Банки, які вже існують, не будуть перезаписані\n"
+    text += "• Інструкції будуть додані до існуючих\n"
+    text += "• Процес незворотний\n\n"
+    text += "Продовжити міграцію?"
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Так, мігрувати", callback_data="confirm_migrate_from_file")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="instructions_menu")]
+    ]
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def confirm_migrate_from_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm and execute migration from file"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    # Call the migration function from instruction_management
+    from handlers.instruction_management import migrate_instructions_from_file_cmd
+    
+    # Convert callback query to a message-like update for the command handler
+    update.message = type('obj', (object,), {
+        'reply_text': lambda text, parse_mode=None: query.edit_message_text(text, parse_mode=parse_mode)
+    })()
+    
+    await migrate_instructions_from_file_cmd(update, context)
 
 # Utility function for handling conversation cancellation
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):

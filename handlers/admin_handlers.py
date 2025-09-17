@@ -179,7 +179,20 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         client_user_id, group_chat_id, bank_name = row[0], row[1], row[2]
 
-        cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
+        # Check if order form exists (indicates complete user process)
+        cursor.execute("SELECT form_data FROM order_forms WHERE order_id=?", (order_id,))
+        form_row = cursor.fetchone()
+        
+        if form_row:
+            # Complete order - user went through full process
+            new_status = "Завершено"
+            completion_type = "повне"
+        else:
+            # Incomplete order - manager finished manually without complete user process
+            new_status = "Незавершено (менеджер)"
+            completion_type = "неповне"
+
+        cursor.execute("UPDATE orders SET status=? WHERE id=?", (new_status, order_id,))
         conn.commit()
 
         # Generate and send questionnaire
@@ -188,14 +201,15 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             questionnaire = generate_order_questionnaire(order_id, bank_name)
             
             # Send questionnaire to the admin who finished the order
-            await update.message.reply_text(f"✅ Замовлення {order_id} завершено.\n\n{questionnaire}", parse_mode='HTML')
+            completion_icon = "✅" if completion_type == "повне" else "⚠️"
+            await update.message.reply_text(f"{completion_icon} Замовлення {order_id} завершено ({completion_type}).\n\n{questionnaire}", parse_mode='HTML')
             
             # Also send to the manager group if it exists
             if group_chat_id:
                 try:
                     await context.bot.send_message(
-                        chat_id=group_chat_id, 
-                        text=f"📋 Замовлення #{order_id} завершено. Ось підсумкова анкета:\n\n{questionnaire}",
+                        chat_id=group_chat_id,
+                        text=f"📋 Замовлення #{order_id} завершено ({completion_type}). Ось підсумкова анкета:\n\n{questionnaire}",
                         parse_mode='HTML'
                     )
                 except Exception as e:
@@ -203,7 +217,7 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
         except Exception as e:
             logger.warning(f"Failed to generate questionnaire for order {order_id}: {e}")
-            await update.message.reply_text(f"✅ Замовлення {order_id} завершено. (Помилка генерації анкети: {e})")
+            await update.message.reply_text(f"✅ Замовлення {order_id} завершено ({completion_type}). (Помилка генерації анкети: {e})")
 
         if group_chat_id:
             try:
@@ -236,13 +250,22 @@ async def finish_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        cursor.execute("SELECT id, user_id, group_id FROM orders WHERE status!='Завершено'")
+        cursor.execute("SELECT id, user_id, group_id FROM orders WHERE status!='Завершено' AND status!='Незавершено (менеджер)'")
         rows = cursor.fetchall()
         finished_count = 0
         freed_groups = set()
 
         for order_id, client_user_id, group_chat_id in rows:
-            cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
+            # Check if order form exists to determine completion type
+            cursor.execute("SELECT form_data FROM order_forms WHERE order_id=?", (order_id,))
+            form_row = cursor.fetchone()
+            
+            if form_row:
+                new_status = "Завершено"
+            else:
+                new_status = "Незавершено (менеджер)"
+                
+            cursor.execute("UPDATE orders SET status=? WHERE id=?", (new_status, order_id,))
             user_states.pop(client_user_id, None)
             if group_chat_id:
                 freed_groups.add(group_chat_id)
@@ -278,14 +301,21 @@ async def orders_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("SELECT COUNT(*) FROM orders")
         total = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM orders WHERE status='Завершено'")
-        finished = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM orders WHERE status!='Завершено'")
-        unfinished = cursor.fetchone()[0]
+        completed = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status='Незавершено (менеджер)'")
+        incomplete = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status!='Завершено' AND status!='Незавершено (менеджер)'")
+        active = cursor.fetchone()[0]
+        
+        completion_rate = (completed / total * 100) if total > 0 else 0
+        
         msg = (
-            f"📊 Статистика замовлень:\n"
-            f"Всього: {total}\n"
-            f"Завершено: {finished}\n"
-            f"Незавершено: {unfinished}\n"
+            f"📊 <b>Статистика замовлень</b>\n\n"
+            f"📈 Всього: {total}\n"
+            f"✅ Завершено повністю: {completed} ({completion_rate:.1f}%)\n"
+            f"⚠️ Завершено неповно: {incomplete}\n"
+            f"🔄 Активних: {active}\n\n"
+            f"💡 <i>Неповні замовлення - це ті, які менеджер завершив вручну, але клієнт не пройшов повний процес реєстрації/перев'язки.</i>"
         )
         await update.message.reply_text(msg)
     except Exception as e:

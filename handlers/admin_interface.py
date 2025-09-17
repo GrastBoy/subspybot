@@ -421,7 +421,7 @@ async def orders_active(query):
                    mg.name as group_name
             FROM orders o
             LEFT JOIN manager_groups mg ON o.group_id = mg.group_id
-            WHERE o.status != 'Завершено'
+            WHERE o.status != 'Завершено' AND o.status != 'Незавершено (менеджер)'
             ORDER BY o.created_at DESC
             LIMIT 20
         """)
@@ -533,7 +533,10 @@ async def orders_stats(query):
         cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'Завершено'")
         completed_orders = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM orders WHERE status != 'Завершено'")
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status = 'Незавершено (менеджер)'")
+        incomplete_orders = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM orders WHERE status != 'Завершено' AND status != 'Незавершено (менеджер)'")
         active_orders = cursor.fetchone()[0]
         
         cursor.execute("SELECT COUNT(*) FROM queue")
@@ -542,7 +545,8 @@ async def orders_stats(query):
         # Get stats by bank
         cursor.execute("""
             SELECT bank, COUNT(*) as total, 
-                   SUM(CASE WHEN status = 'Завершено' THEN 1 ELSE 0 END) as completed
+                   SUM(CASE WHEN status = 'Завершено' THEN 1 ELSE 0 END) as completed,
+                   SUM(CASE WHEN status = 'Незавершено (менеджер)' THEN 1 ELSE 0 END) as incomplete
             FROM orders 
             GROUP BY bank 
             ORDER BY total DESC
@@ -554,16 +558,17 @@ async def orders_stats(query):
             "📈 <b>Статистика замовлень</b>\n\n"
             f"📊 <b>Загальна статистика:</b>\n"
             f"• Всього замовлень: {total_orders}\n"
-            f"• Завершено: {completed_orders}\n"
+            f"• Завершено повністю: {completed_orders}\n"
+            f"• Завершено неповно: {incomplete_orders}\n"
             f"• Активних: {active_orders}\n"
             f"• У черзі: {queue_count}\n\n"
         )
         
         if bank_stats:
             text += "🏦 <b>Статистика по банках:</b>\n"
-            for bank, total, completed in bank_stats:
+            for bank, total, completed, incomplete in bank_stats:
                 completion_rate = (completed / total * 100) if total > 0 else 0
-                text += f"• {bank}: {total} ({completed} завершено, {completion_rate:.1f}%)\n"
+                text += f"• {bank}: {total} ({completed}✅/{incomplete}⚠️, {completion_rate:.1f}%)\n"
         
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_orders")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
