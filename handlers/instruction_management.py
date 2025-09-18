@@ -320,11 +320,12 @@ async def sync_instructions_to_file_cmd(update: Update, context: ContextTypes.DE
                   f"Synced {len(instructions_data)} banks")
 
         await update.message.reply_text(
-            f"✅ Інструкції синхронізовано!\n\n"
+            f"✅ Інструкції синхронізовано в файл (опціонально)!\n\n"
             f"📁 Файл: instructions_generated.py\n"
             f"🏦 Банків: {len(instructions_data)}\n\n"
-            f"Щоб використати, замініть imports в коді:\n"
-            f"<code>from instructions_generated import INSTRUCTIONS</code>",
+            f"💡 <b>Зверніть увагу:</b> Система тепер працює з базою даних.\n"
+            f"Цей файл створено лише як резервна копія.\n\n"
+            f"Бот використовує інструкції з БД автоматично.",
             parse_mode='HTML'
         )
 
