@@ -677,7 +677,7 @@ async def send_instruction(user_id: int, context, order_id: int = None):
     if not steps and stage0 == 0:
         try:
             await context.bot.send_message(
-                chat_id=user_id, 
+                chat_id=user_id,
                 text="Наразі інструкції для цього банку ще не додані. Спробуйте пізніше."
             )
         except Exception:

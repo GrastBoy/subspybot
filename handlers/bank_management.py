@@ -612,11 +612,11 @@ async def add_bank_group_handler(update: Update, context: ContextTypes.DEFAULT_T
     else:
         text = "➕ <b>Додати групу для банку</b>\n\nОберіть банк для якого додати групу:"
         keyboard = []
-        for name, is_active, _, _ in banks:
+        for name, is_active, _, _, _, _ in banks:
             if is_active:  # Only show active banks
                 keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"select_bank_for_group_{name}")])
         
-        if not any(is_active for _, is_active, _, _ in banks):
+        if not any(is_active for _, is_active, _, _, _, _ in banks):
             text = "➕ <b>Додати групу для банку</b>\n\n❌ Немає активних банків.\nСпочатку активуйте хоча б один банк."
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")])

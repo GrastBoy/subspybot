@@ -397,7 +397,7 @@ async def migrate_instructions_from_file_cmd(update: Update, context: ContextTyp
         log_action(0, f"admin_{update.effective_user.id}", "migrate_instructions", 
                   f"{migrated_banks} banks, {migrated_instructions} instructions")
         
-        text = f"✅ <b>Міграція завершена!</b>\n\n"
+        text = "✅ <b>Міграція завершена!</b>\n\n"
         text += f"🏦 Банків додано: {migrated_banks}\n"
         text += f"📝 Інструкцій мігровано: {migrated_instructions}\n\n"
         text += "Тепер ви можете керувати всіма банками та інструкціями через адмін панель!\n\n"

@@ -1,10 +1,10 @@
+import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from db import cursor, get_banks
 from handlers.photo_handlers import assign_group_or_queue, create_order_in_db, send_instruction
-from states import INSTRUCTIONS, find_age_requirement, user_states
-import logging
+from states import find_age_requirement, user_states
 
 logger = logging.getLogger(__name__)
 
