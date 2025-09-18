@@ -274,6 +274,10 @@ def main():
     app.add_handler(CommandHandler("sync_instructions", sync_instructions_to_file_cmd))
     app.add_handler(CommandHandler("migrate_instructions", migrate_instructions_from_file_cmd))
 
+    # Admin-only reload instructions cache command
+    from handlers.reload_instructions import reload_instructions_cmd
+    app.add_handler(CommandHandler("reload_instructions", reload_instructions_cmd))
+
     # Unified Admin Interface
     from handlers.admin_interface import admin_interface_callback, admin_interface_menu
     app.add_handler(CommandHandler("admin", admin_interface_menu))
