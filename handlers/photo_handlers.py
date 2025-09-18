@@ -672,6 +672,17 @@ async def send_instruction(user_id: int, context, order_id: int = None):
         }
 
     steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+    
+    # Check if instructions are empty and handle gracefully
+    if not steps and stage0 == 0:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id, 
+                text="Наразі інструкції для цього банку ще не додані. Спробуйте пізніше."
+            )
+        except Exception:
+            pass
+        return
 
     # Stage2 тригер: як тільки ми закінчили перший крок (stage0 >= 1), але Stage2 ще не завершено
     if stage0 >= 1 and not stage2_complete:

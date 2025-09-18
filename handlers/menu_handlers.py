@@ -1,13 +1,30 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from db import cursor
+from db import cursor, get_banks
 from handlers.photo_handlers import assign_group_or_queue, create_order_in_db, send_instruction
 from states import INSTRUCTIONS, find_age_requirement, user_states
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _banks_from_instructions(action: str):
-    return [bank for bank, actions in INSTRUCTIONS.items() if action in actions and actions[action]]
+    """Get banks from database that support the given action and are active"""
+    banks = get_banks()
+    result = []
+    
+    for bank_name, is_active, register_enabled, change_enabled, _, _ in banks:
+        if not is_active:
+            continue
+            
+        if action == "register" and register_enabled:
+            result.append(bank_name)
+        elif action == "change" and change_enabled:
+            result.append(bank_name)
+            
+    logger.debug(f"User menu banks (action={action}): {result}")
+    return result
 
 def _get_visible_banks(action: str):
     banks = _banks_from_instructions(action)
