@@ -3,11 +3,13 @@ from telegram.ext import ContextTypes
 
 from db import cursor
 from handlers.photo_handlers import assign_group_or_queue, create_order_in_db, send_instruction
-from states import INSTRUCTIONS, find_age_requirement, user_states
+from services.instructions import load_instructions_from_db
+from states import find_age_requirement, user_states
 
 
 def _banks_from_instructions(action: str):
-    return [bank for bank, actions in INSTRUCTIONS.items() if action in actions and actions[action]]
+    instructions = load_instructions_from_db()
+    return [bank for bank, actions in instructions.items() if action in actions and actions[action]]
 
 def _get_visible_banks(action: str):
     banks = _banks_from_instructions(action)

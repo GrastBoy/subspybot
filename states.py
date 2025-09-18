@@ -1,12 +1,16 @@
 from typing import Any, Dict, Optional
 
-try:
-    from instructions import INSTRUCTIONS
-except Exception:
-    INSTRUCTIONS = {}
+from services.instructions import load_instructions_from_db
 
-BANKS_REGISTER = [bank for bank, actions in INSTRUCTIONS.items() if "register" in actions and actions["register"]]
-BANKS_CHANGE = [bank for bank, actions in INSTRUCTIONS.items() if "change" in actions and actions["change"]]
+# Legacy placeholder for backward compatibility
+INSTRUCTIONS = {}
+
+def get_instructions() -> Dict[str, Any]:
+    """Get instructions from database dynamically"""
+    return load_instructions_from_db()
+
+BANKS_REGISTER = []  # Will be populated dynamically
+BANKS_CHANGE = []    # Will be populated dynamically
 
 user_states: Dict[int, Dict[str, Any]] = {}
 
@@ -19,7 +23,8 @@ STAGE2_MANAGER_WAIT_CODE = 11
 STAGE2_MANAGER_WAIT_MSG = 12   # новий стан для повідомлення користувачу (Stage2)
 
 def find_age_requirement(bank: str, action: str) -> Optional[int]:
-    steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+    instructions = get_instructions()
+    steps = instructions.get(bank, {}).get(action, [])
     for step in steps:
         if isinstance(step, dict) and "age" in step:
             return step["age"]
@@ -31,7 +36,8 @@ def get_required_photos(bank: str, action: str, stage0: int) -> Optional[int]:
     Якщо поле відсутнє або індекс виходить за межі — повертає None.
     """
     try:
-        steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+        instructions = get_instructions()
+        steps = instructions.get(bank, {}).get(action, [])
         step = steps[stage0]
         if isinstance(step, dict):
             val = step.get("required_photos")
