@@ -282,6 +282,118 @@ async def stage_type_select_handler(update: Update, context: ContextTypes.DEFAUL
     
     return ConversationHandler.END
 
+async def stage_config_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stage configuration for user data request"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    bank_name = context.user_data.get('instr_bank')
+    action = context.user_data.get('instr_action')
+    step = context.user_data.get('instr_step')
+    stage_type = context.user_data.get('instr_stage_type')
+    selected_fields = context.user_data.get('selected_data_fields', [])
+
+    if data.startswith("data_field_"):
+        field_type = data[11:]  # Remove "data_field_" prefix
+        
+        if field_type in selected_fields:
+            selected_fields.remove(field_type)
+        else:
+            selected_fields.append(field_type)
+        
+        context.user_data['selected_data_fields'] = selected_fields
+        
+        # Update display
+        action_text = "Реєстрації" if action == "register" else "Перев'язки"
+        
+        text = "📋 <b>Налаштування етапу 'Запит даних'</b>\n\n"
+        text += f"🏦 Банк: {bank_name}\n"
+        text += f"🔄 Операція: {action_text}\n"
+        text += f"📋 Етап: {step}\n\n"
+        text += "Оберіть дані, які потрібно зібрати від користувача:\n\n"
+        
+        if selected_fields:
+            text += "Обрані поля:\n"
+            field_names = {
+                'phone': '📱 Телефон',
+                'email': '📧 Email', 
+                'fullname': '👤 ПІБ',
+                'telegram': '💬 Нік Telegram'
+            }
+            for field in selected_fields:
+                text += f"• {field_names.get(field, field)}\n"
+            text += "\n"
+        
+        keyboard = [
+            [InlineKeyboardButton(f"{'✅' if 'phone' in selected_fields else '📱'} Телефон", callback_data="data_field_phone"),
+             InlineKeyboardButton(f"{'✅' if 'email' in selected_fields else '📧'} Email", callback_data="data_field_email")],
+            [InlineKeyboardButton(f"{'✅' if 'fullname' in selected_fields else '👤'} ПІБ", callback_data="data_field_fullname"),
+             InlineKeyboardButton(f"{'✅' if 'telegram' in selected_fields else '💬'} Нік Telegram", callback_data="data_field_telegram")],
+            [InlineKeyboardButton("✅ Завершити вибір", callback_data="data_fields_done")],
+            [InlineKeyboardButton("🔙 Назад", callback_data=f"instr_action_{action}")]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return INSTR_STAGE_CONFIG
+        
+    elif data == "data_fields_done":
+        if not selected_fields:
+            await query.answer("❌ Оберіть хоча б одне поле", show_alert=True)
+            return INSTR_STAGE_CONFIG
+            
+        # Create user data request stage
+        step_data = {
+            'data_fields': selected_fields,
+            'field_config': {field: {'required': True} for field in selected_fields}
+        }
+        
+        # Generate instruction text based on selected fields
+        field_names = {
+            'phone': 'номер телефону',
+            'email': 'email адресу', 
+            'fullname': 'ПІБ (повне ім\'я)',
+            'telegram': 'нік в Telegram'
+        }
+        
+        field_text = ', '.join([field_names.get(field, field) for field in selected_fields])
+        instruction_text = f"Будь ласка, надайте наступні дані: {field_text}."
+        
+        success = add_bank_instruction(
+            bank_name=bank_name,
+            action=action,
+            step_number=step,
+            instruction_text=instruction_text,
+            step_type=stage_type,
+            step_data=step_data
+        )
+        
+        if success:
+            action_text = "Реєстрації" if action == "register" else "Перев'язки"
+            
+            text = "✅ <b>Етап 'Запит даних' створено!</b>\n\n"
+            text += f"🏦 Банк: {bank_name}\n"
+            text += f"🔄 Операція: {action_text}\n"
+            text += f"📋 Етап: {step}\n\n"
+            text += "Збиратимуться наступні дані:\n"
+            for field in selected_fields:
+                text += f"• {field_names.get(field, field)}\n"
+            
+            log_action(0, f"admin_{update.effective_user.id}", "add_stage",
+                      f"{bank_name}:{action}:{step}:{stage_type}")
+        else:
+            text = "❌ Помилка при створенні етапу"
+            
+        keyboard = [
+            [InlineKeyboardButton("➕ Додати ще етап", callback_data="instr_add_another")],
+            [InlineKeyboardButton("✅ Завершити", callback_data="instructions_menu")]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return ConversationHandler.END
+    
+    return INSTR_STAGE_CONFIG
+
 async def instruction_text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle instruction text input for text+screenshots stages"""
     text = update.message.text.strip()
@@ -356,6 +468,177 @@ async def instruction_add_another_handler(update: Update, context: ContextTypes.
     await instructions_add_handler(update, context)
     return INSTR_BANK_SELECT
 
+async def instructions_edit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start editing instruction stages"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    banks = list(_iter_banks_basic())
+
+    if not banks:
+        text = "❌ Спочатку потрібно додати банки"
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="instructions_list")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "✏️ <b>Редагування етапів</b>\n\nВиберіть банк для редагування етапів:"
+    keyboard = []
+
+    for bank_name, is_active, register_enabled, change_enabled in banks:
+        if is_active:
+            # Check if bank has any instructions
+            register_instructions = get_bank_instructions(bank_name, "register")
+            change_instructions = get_bank_instructions(bank_name, "change")
+            
+            if register_instructions or change_instructions:
+                total_stages = len(register_instructions) + len(change_instructions)
+                keyboard.append([InlineKeyboardButton(f"{bank_name} ({total_stages} етапів)", callback_data=f"edit_bank_stages_{bank_name}")])
+
+    if not keyboard:
+        text = "❌ Немає банків з етапами для редагування"
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="instructions_list")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def edit_bank_stages_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show stages for a specific bank for editing"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    bank_name = query.data.replace("edit_bank_stages_", "")
+    
+    register_instructions = get_bank_instructions(bank_name, "register")
+    change_instructions = get_bank_instructions(bank_name, "change")
+    stage_types = get_stage_types()
+
+    text = f"✏️ <b>Редагування етапів '{bank_name}'</b>\n\n"
+    keyboard = []
+
+    if register_instructions:
+        text += "📝 <b>Реєстрація:</b>\n"
+        for instr in register_instructions:
+            step_number, instruction_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+            stage_name = stage_types.get(step_type, {}).get('name', step_type)
+            text += f"  {step_order}. {stage_name} - {instruction_text[:40]}...\n"
+            keyboard.append([InlineKeyboardButton(f"✏️ Етап {step_order} (Реєстрація)", callback_data=f"edit_stage_{bank_name}_register_{step_number}")])
+        text += "\n"
+
+    if change_instructions:
+        text += "🔄 <b>Перев'язка:</b>\n"
+        for instr in change_instructions:
+            step_number, instruction_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+            stage_name = stage_types.get(step_type, {}).get('name', step_type)
+            text += f"  {step_order}. {stage_name} - {instruction_text[:40]}...\n"
+            keyboard.append([InlineKeyboardButton(f"✏️ Етап {step_order} (Перев'язка)", callback_data=f"edit_stage_{bank_name}_change_{step_number}")])
+
+    keyboard.extend([
+        [InlineKeyboardButton("🔄 Змінити порядок", callback_data=f"reorder_stages_{bank_name}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="instructions_edit")]
+    ])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def instructions_reorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start reordering instruction stages"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    banks = list(_iter_banks_basic())
+
+    if not banks:
+        text = "❌ Спочатку потрібно додати банки"
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="instructions_list")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "🔄 <b>Зміна порядку етапів</b>\n\nВиберіть банк для зміни порядку етапів:"
+    keyboard = []
+
+    for bank_name, is_active, register_enabled, change_enabled in banks:
+        if is_active:
+            # Check if bank has multiple instructions
+            register_instructions = get_bank_instructions(bank_name, "register")
+            change_instructions = get_bank_instructions(bank_name, "change")
+            
+            if len(register_instructions) > 1 or len(change_instructions) > 1:
+                total_stages = len(register_instructions) + len(change_instructions)
+                keyboard.append([InlineKeyboardButton(f"{bank_name} ({total_stages} етапів)", callback_data=f"reorder_bank_{bank_name}")])
+
+    if not keyboard:
+        text = "❌ Немає банків з достатньою кількістю етапів для зміни порядку"
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="instructions_list")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def reorder_bank_stages_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show reordering interface for a specific bank"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+
+    query = update.callback_query
+    await query.answer()
+
+    bank_name = query.data.replace("reorder_bank_", "").replace("reorder_stages_", "")
+    
+    register_instructions = get_bank_instructions(bank_name, "register")
+    change_instructions = get_bank_instructions(bank_name, "change")
+    stage_types = get_stage_types()
+
+    text = f"🔄 <b>Зміна порядку етапів '{bank_name}'</b>\n\n"
+    text += "Використовуйте кнопки ⬆️ та ⬇️ для зміни порядку етапів:\n\n"
+    
+    keyboard = []
+
+    if register_instructions and len(register_instructions) > 1:
+        text += "📝 <b>Реєстрація:</b>\n"
+        for i, instr in enumerate(register_instructions):
+            step_number, instruction_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+            stage_name = stage_types.get(step_type, {}).get('name', step_type)
+            text += f"  {i+1}. {stage_name}\n"
+            
+            buttons = []
+            if i > 0:
+                buttons.append(InlineKeyboardButton("⬆️", callback_data=f"move_up_{bank_name}_register_{step_number}"))
+            if i < len(register_instructions) - 1:
+                buttons.append(InlineKeyboardButton("⬇️", callback_data=f"move_down_{bank_name}_register_{step_number}"))
+            
+            if buttons:
+                buttons.append(InlineKeyboardButton(f"Етап {i+1}", callback_data="noop"))
+                keyboard.append(buttons)
+        text += "\n"
+
+    if change_instructions and len(change_instructions) > 1:
+        text += "🔄 <b>Перев'язка:</b>\n"
+        for i, instr in enumerate(change_instructions):
+            step_number, instruction_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+            stage_name = stage_types.get(step_type, {}).get('name', step_type)
+            text += f"  {i+1}. {stage_name}\n"
+            
+            buttons = []
+            if i > 0:
+                buttons.append(InlineKeyboardButton("⬆️", callback_data=f"move_up_{bank_name}_change_{step_number}"))
+            if i < len(change_instructions) - 1:
+                buttons.append(InlineKeyboardButton("⬇️", callback_data=f"move_down_{bank_name}_change_{step_number}"))
+                
+            if buttons:
+                buttons.append(InlineKeyboardButton(f"Етап {i+1}", callback_data="noop"))
+                keyboard.append(buttons)
+
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"edit_bank_stages_{bank_name}")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
 async def manage_bank_instructions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command to manage bank instructions"""
     if not is_admin(update.effective_user.id):
@@ -391,16 +674,22 @@ async def manage_bank_instructions_cmd(update: Update, context: ContextTypes.DEF
 
     if register_instructions:
         text += "📝 <b>Реєстрація:</b>\n"
-        for step_num, instr_text, images, age_req, req_photos in register_instructions:
-            text += f"  {step_num}. {instr_text[:50]}{'...' if len(instr_text) > 50 else ''}\n"
+        for instr in register_instructions:
+            step_num, instr_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+            stage_types = get_stage_types()
+            stage_name = stage_types.get(step_type, {}).get('name', step_type)
+            text += f"  {step_order}. {stage_name}: {instr_text[:50]}{'...' if len(instr_text) > 50 else ''}\n"
         text += "\n"
     else:
         text += "📝 <b>Реєстрація:</b> ❌ Немає інструкцій\n\n"
 
     if change_instructions:
         text += "🔄 <b>Перев'язка:</b>\n"
-        for step_num, instr_text, images, age_req, req_photos in change_instructions:
-            text += f"  {step_num}. {instr_text[:50]}{'...' if len(instr_text) > 50 else ''}\n"
+        for instr in change_instructions:
+            step_num, instr_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+            stage_types = get_stage_types()
+            stage_name = stage_types.get(step_type, {}).get('name', step_type)
+            text += f"  {step_order}. {stage_name}: {instr_text[:50]}{'...' if len(instr_text) > 50 else ''}\n"
     else:
         text += "🔄 <b>Перев'язка:</b> ❌ Немає інструкцій\n"
 
@@ -426,7 +715,8 @@ async def sync_instructions_to_file_cmd(update: Update, context: ContextTypes.DE
                 register_instructions = get_bank_instructions(bank_name, "register")
                 if register_instructions:
                     bank_instructions["register"] = []
-                    for step_num, instr_text, images_json, age_req, req_photos in register_instructions:
+                    for instr in register_instructions:
+                        step_num, instr_text, images_json, age_req, req_photos, step_type, step_data_json, step_order = instr
                         step_data = {"text": instr_text}
                         if images_json:
                             try:
@@ -439,13 +729,22 @@ async def sync_instructions_to_file_cmd(update: Update, context: ContextTypes.DE
                             step_data["age"] = age_req
                         if req_photos:
                             step_data["required_photos"] = req_photos
+                        # Add stage type information for enhanced compatibility
+                        step_data["stage_type"] = step_type
+                        if step_data_json:
+                            try:
+                                enhanced_data = json.loads(step_data_json)
+                                step_data["stage_config"] = enhanced_data
+                            except (json.JSONDecodeError, ValueError):
+                                pass
                         bank_instructions["register"].append(step_data)
 
             if change_enabled:
                 change_instructions = get_bank_instructions(bank_name, "change")
                 if change_instructions:
                     bank_instructions["change"] = []
-                    for step_num, instr_text, images_json, age_req, req_photos in change_instructions:
+                    for instr in change_instructions:
+                        step_num, instr_text, images_json, age_req, req_photos, step_type, step_data_json, step_order = instr
                         step_data = {"text": instr_text}
                         if images_json:
                             try:
@@ -458,6 +757,14 @@ async def sync_instructions_to_file_cmd(update: Update, context: ContextTypes.DE
                             step_data["age"] = age_req
                         if req_photos:
                             step_data["required_photos"] = req_photos
+                        # Add stage type information for enhanced compatibility
+                        step_data["stage_type"] = step_type
+                        if step_data_json:
+                            try:
+                                enhanced_data = json.loads(step_data_json)
+                                step_data["stage_config"] = enhanced_data
+                            except (json.JSONDecodeError, ValueError):
+                                pass
                         bank_instructions["change"].append(step_data)
 
             if bank_instructions:
