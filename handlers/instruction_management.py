@@ -11,6 +11,14 @@ from db import add_bank_instruction, get_bank_instructions, get_banks, is_admin,
 
 logger = logging.getLogger(__name__)
 
+def _iter_banks_basic():
+    """Helper to yield (name, is_active, register_enabled, change_enabled) from get_banks()"""
+    banks = get_banks()
+    for bank_row in banks:
+        # get_banks() returns (name, is_active, register_enabled, change_enabled, price, description)
+        # We only need the first 4 columns
+        yield bank_row[:4]
+
 # Conversation states for instruction management
 INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_STEP_INPUT, INSTR_TEXT_INPUT = range(10, 14)
 
@@ -22,7 +30,7 @@ async def instructions_list_handler(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
 
-    banks = get_banks()
+    banks = list(_iter_banks_basic())
 
     if not banks:
         text = "📝 <b>Інструкції банків</b>\n\n❌ Немає зареєстрованих банків"
@@ -66,7 +74,7 @@ async def instructions_add_handler(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
 
-    banks = get_banks()
+    banks = list(_iter_banks_basic())
 
     if not banks:
         text = "❌ Спочатку потрібно додати банки"
@@ -208,7 +216,7 @@ async def manage_bank_instructions_cmd(update: Update, context: ContextTypes.DEF
 
     if not context.args:
         # Show usage and available banks
-        banks = get_banks()
+        banks = list(_iter_banks_basic())
         text = "📝 <b>Управління інструкціями банків</b>\n\n"
         text += "Використання: /manage_instructions <назва_банку>\n\n"
         text += "Доступні банки:\n"
@@ -223,7 +231,7 @@ async def manage_bank_instructions_cmd(update: Update, context: ContextTypes.DEF
     bank_name = " ".join(context.args).strip()
 
     # Check if bank exists
-    banks = {name for name, _, _, _ in get_banks()}
+    banks = {name for name, _, _, _ in _iter_banks_basic()}
     if bank_name not in banks:
         await update.message.reply_text(f"❌ Банк '{bank_name}' не знайдено")
         return
@@ -258,7 +266,7 @@ async def sync_instructions_to_file_cmd(update: Update, context: ContextTypes.DE
 
     try:
         # Get all banks and their instructions
-        banks = get_banks()
+        banks = list(_iter_banks_basic())
         instructions_data = {}
 
         for bank_name, is_active, register_enabled, change_enabled in banks:
@@ -389,7 +397,7 @@ async def migrate_instructions_from_file_cmd(update: Update, context: ContextTyp
         log_action(0, f"admin_{update.effective_user.id}", "migrate_instructions", 
                   f"{migrated_banks} banks, {migrated_instructions} instructions")
         
-        text = f"✅ <b>Міграція завершена!</b>\n\n"
+        text = "✅ <b>Міграція завершена!</b>\n\n"
         text += f"🏦 Банків додано: {migrated_banks}\n"
         text += f"📝 Інструкцій мігровано: {migrated_instructions}\n\n"
         text += "Тепер ви можете керувати всіма банками та інструкціями через адмін панель!\n\n"
