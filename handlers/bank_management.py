@@ -23,9 +23,9 @@ from db import (
 logger = logging.getLogger(__name__)
 
 # Conversation states
-BANK_NAME_INPUT, BANK_PRICE_INPUT, BANK_DESCRIPTION_INPUT, BANK_SETTINGS_INPUT = range(4)
-INSTRUCTION_BANK_SELECT, INSTRUCTION_ACTION_SELECT, INSTRUCTION_STEP_INPUT = range(4, 7)
-GROUP_BANK_SELECT, GROUP_NAME_INPUT = range(7, 9)
+BANK_NAME_INPUT, BANK_PRICE_INPUT, BANK_DESCRIPTION_INPUT, BANK_MIN_AGE_INPUT, BANK_SETTINGS_INPUT = range(5)
+INSTRUCTION_BANK_SELECT, INSTRUCTION_ACTION_SELECT, INSTRUCTION_STEP_INPUT = range(5, 8)
+GROUP_BANK_SELECT, GROUP_NAME_INPUT = range(8, 10)
 
 async def banks_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main banks management menu"""
@@ -74,7 +74,7 @@ async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text = "📋 <b>Список банків</b>\n\n❌ Немає зареєстрованих банків"
     else:
         text = "📋 <b>Список банків</b>\n\n"
-        for name, is_active, register_enabled, change_enabled, price, description in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
             status = "✅ Активний" if is_active else "❌ Неактивний"
             register_status = "✅" if register_enabled else "❌"
             change_status = "✅" if change_enabled else "❌"
@@ -82,6 +82,7 @@ async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text += f"🏦 <b>{name}</b>\n"
             text += f"   Статус: {status}\n"
             text += f"   Реєстрація: {register_status} | Перев'язка: {change_status}\n"
+            text += f"   🔞 Мінімальний вік: {min_age or 18}\n"
             if price:
                 text += f"   💰 Ціна: {price}\n"
             if description:
@@ -112,7 +113,7 @@ async def bank_name_input_handler(update: Update, context: ContextTypes.DEFAULT_
         return BANK_NAME_INPUT
 
     # Check if bank already exists
-    existing_banks = [name for name, _, _, _, _, _ in get_banks()]
+    existing_banks = [name for name, _, _, _, _, _, _ in get_banks()]
     if bank_name in existing_banks:
         await update.message.reply_text(f"❌ Банк '{bank_name}' вже існує. Введіть іншу назву:")
         return BANK_NAME_INPUT
@@ -163,10 +164,47 @@ async def bank_description_input_handler(update: Update, context: ContextTypes.D
             return BANK_DESCRIPTION_INPUT
         context.user_data['new_bank_description'] = description
 
+    # Now move to min_age input
+    bank_name = context.user_data.get('new_bank_name', 'Unknown')
+    
+    text = f"🔞 <b>Мінімальний вік для банку '{bank_name}'</b>\n\n"
+    text += "Введіть мінімальний вік для користувачів цього банку (наприклад: 18, 21) або натисніть кнопку 'За замовчуванням (18)':"
+
+    keyboard = [[InlineKeyboardButton("⏭️ За замовчуванням (18)", callback_data="skip_min_age")]]
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    
+    return BANK_MIN_AGE_INPUT
+
+async def bank_min_age_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle bank minimum age input"""
+    if update.callback_query and update.callback_query.data == "skip_min_age":
+        await update.callback_query.answer()
+        context.user_data['new_bank_min_age'] = 18
+    else:
+        min_age_text = update.message.text.strip() if update.message else None
+        if not min_age_text:
+            await update.message.reply_text("❌ Будь ласка, введіть вік або натисніть 'За замовчуванням'")
+            return BANK_MIN_AGE_INPUT
+        
+        try:
+            min_age = int(min_age_text)
+            if min_age < 14 or min_age > 99:
+                await update.message.reply_text("❌ Вік повинен бути від 14 до 99 років. Спробуйте ще раз:")
+                return BANK_MIN_AGE_INPUT
+            context.user_data['new_bank_min_age'] = min_age
+        except ValueError:
+            await update.message.reply_text("❌ Введіть число (вік). Спробуйте ще раз:")
+            return BANK_MIN_AGE_INPUT
+
     # Now move to settings
     bank_name = context.user_data.get('new_bank_name', 'Unknown')
     price = context.user_data.get('new_bank_price')
     description = context.user_data.get('new_bank_description')
+    min_age = context.user_data.get('new_bank_min_age', 18)
 
     keyboard = [
         [InlineKeyboardButton("✅ Реєстрація", callback_data="bank_reg_yes"),
@@ -181,6 +219,7 @@ async def bank_description_input_handler(update: Update, context: ContextTypes.D
         text += f"💰 Ціна: {price}\n"
     if description:
         text += f"📝 Опис: {description}\n"
+    text += f"🔞 Мінімальний вік: {min_age}\n"
     text += "\nРеєстрація: ✅ Увімкнена\n"
     text += "Перев'язка: ✅ Увімкнена\n\n"
     text += "Змініть налаштування або збережіть банк:"
@@ -217,8 +256,9 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
         change_enabled = context.user_data.get('bank_change_enabled', True)
         price = context.user_data.get('new_bank_price')
         description = context.user_data.get('new_bank_description')
+        min_age = context.user_data.get('new_bank_min_age', 18)
 
-        if add_bank(bank_name, register_enabled, change_enabled, price, description):
+        if add_bank(bank_name, register_enabled, change_enabled, price, description, min_age):
             text = f"✅ Банк '{bank_name}' успішно додано!"
             log_action(0, f"admin_{update.effective_user.id}", "add_bank", bank_name)
         else:
@@ -230,6 +270,7 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop('new_bank_name', None)
         context.user_data.pop('new_bank_price', None)
         context.user_data.pop('new_bank_description', None)
+        context.user_data.pop('new_bank_min_age', None)
         context.user_data.pop('bank_register_enabled', None)
         context.user_data.pop('bank_change_enabled', None)
 
@@ -244,12 +285,14 @@ async def bank_settings_handler(update: Update, context: ContextTypes.DEFAULT_TY
     change_status = "✅ Увімкнена" if context.user_data.get('bank_change_enabled', True) else "❌ Вимкнена"
     price = context.user_data.get('new_bank_price')
     description = context.user_data.get('new_bank_description')
+    min_age = context.user_data.get('new_bank_min_age', 18)
 
     text = f"🏦 <b>Налаштування банку '{bank_name}'</b>\n\n"
     if price:
         text += f"💰 Ціна: {price}\n"
     if description:
         text += f"📝 Опис: {description}\n"
+    text += f"🔞 Мінімальний вік: {min_age}\n"
     text += f"\nРеєстрація: {register_status}\n"
     text += f"Перев'язка: {change_status}\n\n"
     text += "Змініть налаштування або збережіть банк:"

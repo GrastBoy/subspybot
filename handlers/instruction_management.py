@@ -7,7 +7,11 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-from db import add_bank_instruction, get_bank_instructions, get_banks, is_admin, log_action
+from db import (
+    add_bank_instruction, get_bank_instructions, get_banks, is_admin, log_action,
+    get_stage_types, update_bank_instruction, delete_bank_instruction, 
+    reorder_bank_instructions, get_next_step_number, get_instruction_by_id
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +19,16 @@ def _iter_banks_basic():
     """Helper to yield (name, is_active, register_enabled, change_enabled) from get_banks()"""
     banks = get_banks()
     for bank_row in banks:
-        # get_banks() returns (name, is_active, register_enabled, change_enabled, price, description)
+        # get_banks() returns (name, is_active, register_enabled, change_enabled, price, description, min_age)
         # We only need the first 4 columns
         yield bank_row[:4]
 
-# Conversation states for instruction management
-INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_STEP_INPUT, INSTR_TEXT_INPUT = range(10, 14)
+# Conversation states for enhanced instruction management
+INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_STAGE_TYPE_SELECT, INSTR_STAGE_CONFIG, INSTR_TEXT_INPUT = range(10, 15)
+INSTR_EDIT_SELECT, INSTR_EDIT_FIELD, INSTR_REORDER_SELECT = range(15, 18)
 
 async def instructions_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all instructions for all banks"""
+    """List all instructions for all banks with enhanced stage information"""
     if not is_admin(update.effective_user.id):
         return await update.callback_query.answer("⛔ Немає доступу")
 
@@ -39,6 +44,7 @@ async def instructions_list_handler(update: Update, context: ContextTypes.DEFAUL
         return
 
     text = "📝 <b>Інструкції банків</b>\n\n"
+    stage_types = get_stage_types()
 
     for bank_name, is_active, register_enabled, change_enabled in banks:
         text += f"🏦 <b>{bank_name}</b>\n"
@@ -48,26 +54,42 @@ async def instructions_list_handler(update: Update, context: ContextTypes.DEFAUL
         change_instructions = get_bank_instructions(bank_name, "change")
 
         if register_enabled and register_instructions:
-            text += f"   📝 Реєстрація: {len(register_instructions)} кроків\n"
+            text += f"   📝 <b>Реєстрація:</b> {len(register_instructions)} етапів\n"
+            # Show first 3 stages with types
+            for i, instr in enumerate(register_instructions[:3]):
+                step_number, instruction_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+                stage_name = stage_types.get(step_type, {}).get('name', step_type)
+                text += f"      {step_order}. {stage_name}\n"
+            if len(register_instructions) > 3:
+                text += f"      ... та ще {len(register_instructions) - 3} етапів\n"
         elif register_enabled:
-            text += "   📝 Реєстрація: ❌ Немає інструкцій\n"
+            text += "   📝 <b>Реєстрація:</b> ❌ Немає етапів\n"
 
         if change_enabled and change_instructions:
-            text += f"   🔄 Перев'язка: {len(change_instructions)} кроків\n"
+            text += f"   🔄 <b>Перев'язка:</b> {len(change_instructions)} етапів\n"
+            # Show first 3 stages with types
+            for i, instr in enumerate(change_instructions[:3]):
+                step_number, instruction_text, images_json, age_req, req_photos, step_type, step_data, step_order = instr
+                stage_name = stage_types.get(step_type, {}).get('name', step_type)
+                text += f"      {step_order}. {stage_name}\n"
+            if len(change_instructions) > 3:
+                text += f"      ... та ще {len(change_instructions) - 3} етапів\n"
         elif change_enabled:
-            text += "   🔄 Перев'язка: ❌ Немає інструкцій\n"
+            text += "   🔄 <b>Перев'язка:</b> ❌ Немає етапів\n"
 
         text += "\n"
 
     keyboard = [
-        [InlineKeyboardButton("➕ Додати інструкцію", callback_data="instructions_add")],
+        [InlineKeyboardButton("➕ Додати етап", callback_data="instructions_add")],
+        [InlineKeyboardButton("✏️ Редагувати етапи", callback_data="instructions_edit")],
+        [InlineKeyboardButton("🔄 Змінити порядок", callback_data="instructions_reorder")],
         [InlineKeyboardButton("🔙 Назад", callback_data="instructions_menu")]
     ]
 
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 async def instructions_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start adding instruction conversation"""
+    """Start adding instruction stage conversation"""
     if not is_admin(update.effective_user.id):
         return await update.callback_query.answer("⛔ Немає доступу")
 
@@ -82,7 +104,7 @@ async def instructions_add_handler(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    text = "🏦 <b>Виберіть банк для додавання інструкції:</b>\n\n"
+    text = "🏦 <b>Виберіть банк для додавання етапу:</b>\n\n"
     keyboard = []
 
     for bank_name, is_active, register_enabled, change_enabled in banks:
@@ -117,7 +139,7 @@ async def instruction_bank_select_handler(update: Update, context: ContextTypes.
     return INSTR_ACTION_SELECT
 
 async def instruction_action_select_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle action selection for instruction"""
+    """Handle action selection and move to stage type selection"""
     query = update.callback_query
     await query.answer()
 
@@ -134,25 +156,134 @@ async def instruction_action_select_handler(update: Update, context: ContextType
 
     context.user_data['instr_action'] = action
 
-    # Get existing steps count
-    existing_instructions = get_bank_instructions(bank_name, action)
-    next_step = len(existing_instructions) + 1
-
+    # Get next step number
+    next_step = get_next_step_number(bank_name, action)
     context.user_data['instr_step'] = next_step
 
     action_text = "Реєстрації" if action == "register" else "Перев'язки"
-
-    text = "📝 <b>Додавання інструкції</b>\n\n"
+    
+    # Show stage type selection
+    stage_types = get_stage_types()
+    
+    text = "🎭 <b>Оберіть тип етапу</b>\n\n"
     text += f"🏦 Банк: {bank_name}\n"
-    text += f"🔄 Тип: {action_text}\n"
-    text += f"📋 Крок: {next_step}\n\n"
-    text += f"Введіть текст інструкції для кроку {next_step}:"
+    text += f"🔄 Тип операції: {action_text}\n"
+    text += f"📋 Етап: {next_step}\n\n"
+    text += "Доступні типи етапів:\n\n"
 
-    await query.edit_message_text(text, parse_mode='HTML')
-    return INSTR_TEXT_INPUT
+    keyboard = []
+    for stage_type, info in stage_types.items():
+        text += f"<b>{info['name']}</b>\n{info['description']}\n\n"
+        keyboard.append([InlineKeyboardButton(info['name'], callback_data=f"stage_type_{stage_type}")])
+
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="instr_bank_" + bank_name)])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    return INSTR_STAGE_TYPE_SELECT
+
+async def stage_type_select_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stage type selection and show appropriate configuration"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("stage_type_"):
+        return ConversationHandler.END
+
+    stage_type = data[11:]  # Remove "stage_type_" prefix
+    
+    bank_name = context.user_data.get('instr_bank')
+    action = context.user_data.get('instr_action')
+    step = context.user_data.get('instr_step')
+
+    if not all([bank_name, action, step]):
+        await query.edit_message_text("❌ Помилка: відсутні дані. Почніть заново.")
+        return ConversationHandler.END
+
+    context.user_data['instr_stage_type'] = stage_type
+    
+    stage_types = get_stage_types()
+    stage_info = stage_types.get(stage_type, {})
+    
+    action_text = "Реєстрації" if action == "register" else "Перев'язки"
+
+    # Configure stage based on type
+    if stage_type == 'text_screenshots':
+        text = "📝 <b>Налаштування етапу 'Текст + скріни'</b>\n\n"
+        text += f"🏦 Банк: {bank_name}\n"
+        text += f"🔄 Операція: {action_text}\n"
+        text += f"📋 Етап: {step}\n\n"
+        text += "Введіть текст інструкції для користувача:"
+        
+        await query.edit_message_text(text, parse_mode='HTML')
+        return INSTR_TEXT_INPUT
+        
+    elif stage_type == 'data_delivery':
+        # Create default data delivery stage
+        step_data = {
+            'phone_required': True,
+            'email_required': True,
+            'template_text': 'Запросіть у менеджера номер телефону та email для отримання кодів.'
+        }
+        
+        success = add_bank_instruction(
+            bank_name=bank_name,
+            action=action,
+            step_number=step,
+            instruction_text=step_data['template_text'],
+            step_type=stage_type,
+            step_data=step_data
+        )
+        
+        if success:
+            text = "✅ <b>Етап 'Видача даних' створено!</b>\n\n"
+            text += f"🏦 Банк: {bank_name}\n"
+            text += f"🔄 Операція: {action_text}\n"
+            text += f"📋 Етап: {step}\n\n"
+            text += "Етап налаштовано для:\n"
+            text += "• ✅ Запит номеру телефону\n"
+            text += "• ✅ Запит email\n"
+            text += "• 🤖 Автоматична координація з менеджером\n\n"
+            
+            log_action(0, f"admin_{update.effective_user.id}", "add_stage",
+                      f"{bank_name}:{action}:{step}:{stage_type}")
+        else:
+            text = "❌ Помилка при створенні етапу"
+            
+        keyboard = [
+            [InlineKeyboardButton("➕ Додати ще етап", callback_data="instr_add_another")],
+            [InlineKeyboardButton("✅ Завершити", callback_data="instructions_menu")]
+        ]
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return ConversationHandler.END
+        
+    elif stage_type == 'user_data_request':
+        text = "📋 <b>Налаштування етапу 'Запит даних'</b>\n\n"
+        text += f"🏦 Банк: {bank_name}\n"
+        text += f"🔄 Операція: {action_text}\n"
+        text += f"📋 Етап: {step}\n\n"
+        text += "Оберіть дані, які потрібно зібрати від користувача:\n\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("📱 Телефон", callback_data="data_field_phone"),
+             InlineKeyboardButton("📧 Email", callback_data="data_field_email")],
+            [InlineKeyboardButton("👤 ПІБ", callback_data="data_field_fullname"),
+             InlineKeyboardButton("💬 Нік Telegram", callback_data="data_field_telegram")],
+            [InlineKeyboardButton("✅ Завершити вибір", callback_data="data_fields_done")],
+            [InlineKeyboardButton("🔙 Назад", callback_data=f"instr_action_{action}")]
+        ]
+        
+        # Initialize data fields selection
+        context.user_data['selected_data_fields'] = []
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return INSTR_STAGE_CONFIG
+    
+    return ConversationHandler.END
 
 async def instruction_text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle instruction text input"""
+    """Handle instruction text input for text+screenshots stages"""
     text = update.message.text.strip()
 
     if not text:
@@ -162,41 +293,57 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
     bank_name = context.user_data.get('instr_bank')
     action = context.user_data.get('instr_action')
     step = context.user_data.get('instr_step')
+    stage_type = context.user_data.get('instr_stage_type', 'text_screenshots')
 
     if not all([bank_name, action, step]):
         await update.message.reply_text("❌ Помилка: відсутні дані. Почніть заново.")
         return ConversationHandler.END
 
-    # Save instruction
-    success = add_bank_instruction(bank_name, action, step, text)
+    # Create stage data for text+screenshots
+    step_data = {
+        'text': text,
+        'example_images': [],
+        'required_photos': 1
+    }
+
+    # Save instruction with enhanced stage support
+    success = add_bank_instruction(
+        bank_name=bank_name,
+        action=action,
+        step_number=step,
+        instruction_text=text,
+        step_type=stage_type,
+        step_data=step_data
+    )
 
     if success:
-        log_action(0, f"admin_{update.effective_user.id}", "add_instruction",
-                  f"{bank_name}:{action}:{step}")
+        log_action(0, f"admin_{update.effective_user.id}", "add_stage",
+                  f"{bank_name}:{action}:{step}:{stage_type}")
 
         action_text = "Реєстрації" if action == "register" else "Перев'язки"
 
         keyboard = [
-            [InlineKeyboardButton("➕ Додати ще крок", callback_data="instr_add_another")],
+            [InlineKeyboardButton("➕ Додати ще етап", callback_data="instr_add_another")],
             [InlineKeyboardButton("✅ Завершити", callback_data="instructions_menu")]
         ]
 
-        text_response = "✅ <b>Інструкція додана!</b>\n\n"
+        text_response = "✅ <b>Етап 'Текст + скріни' створено!</b>\n\n"
         text_response += f"🏦 Банк: {bank_name}\n"
         text_response += f"🔄 Тип: {action_text}\n"
-        text_response += f"📋 Крок: {step}\n\n"
+        text_response += f"📋 Етап: {step}\n\n"
         text_response += "Що далі?"
 
         await update.message.reply_text(text_response,
                                       reply_markup=InlineKeyboardMarkup(keyboard),
                                       parse_mode='HTML')
     else:
-        await update.message.reply_text("❌ Помилка при збереженні інструкції")
+        await update.message.reply_text("❌ Помилка при збереженні етапу")
 
     # Clear user data
     context.user_data.pop('instr_bank', None)
     context.user_data.pop('instr_action', None)
     context.user_data.pop('instr_step', None)
+    context.user_data.pop('instr_stage_type', None)
 
     return ConversationHandler.END
 
