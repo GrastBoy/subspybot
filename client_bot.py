@@ -97,6 +97,7 @@ def main():
         BANK_NAME_INPUT,
         BANK_PRICE_INPUT,
         BANK_DESCRIPTION_INPUT,
+        BANK_MIN_AGE_INPUT,
         BANK_SETTINGS_INPUT,
         add_admin_group_handler,
         add_bank_group_handler,
@@ -104,6 +105,7 @@ def main():
         bank_name_input_handler,
         bank_price_input_handler,
         bank_description_input_handler,
+        bank_min_age_input_handler,
         bank_settings_handler,
         banks_management_menu,
         cancel_conversation,
@@ -144,6 +146,10 @@ def main():
             BANK_DESCRIPTION_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bank_description_input_handler),
                 CallbackQueryHandler(bank_description_input_handler, pattern="^skip_description$")
+            ],
+            BANK_MIN_AGE_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bank_min_age_input_handler),
+                CallbackQueryHandler(bank_min_age_input_handler, pattern="^skip_min_age$")
             ],
             BANK_SETTINGS_INPUT: [CallbackQueryHandler(bank_settings_handler, pattern="^(bank_reg_|bank_change_|bank_save).*$")]
         },
@@ -190,6 +196,8 @@ def main():
     from handlers.instruction_management import (
         INSTR_ACTION_SELECT,
         INSTR_BANK_SELECT,
+        INSTR_STAGE_TYPE_SELECT,
+        INSTR_STAGE_CONFIG,
         INSTR_TEXT_INPUT,
         cancel_instruction_conversation,
         instruction_action_select_handler,
@@ -198,6 +206,12 @@ def main():
         instruction_text_input_handler,
         instructions_add_handler,
         instructions_list_handler,
+        instructions_edit_handler,
+        instructions_reorder_handler,
+        edit_bank_stages_handler,
+        reorder_bank_stages_handler,
+        stage_type_select_handler,
+        stage_config_handler,
         manage_bank_instructions_cmd,
         sync_instructions_to_file_cmd,
         migrate_instructions_from_file_cmd,
@@ -207,6 +221,8 @@ def main():
         states={
             INSTR_BANK_SELECT: [CallbackQueryHandler(instruction_bank_select_handler, pattern="^instr_bank_.*$")],
             INSTR_ACTION_SELECT: [CallbackQueryHandler(instruction_action_select_handler, pattern="^instr_action_.*$")],
+            INSTR_STAGE_TYPE_SELECT: [CallbackQueryHandler(stage_type_select_handler, pattern="^stage_type_.*$")],
+            INSTR_STAGE_CONFIG: [CallbackQueryHandler(stage_config_handler, pattern="^data_field_.*$|^data_fields_done$")],
             INSTR_TEXT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, instruction_text_input_handler)]
         },
         fallbacks=[CommandHandler("cancel", cancel_instruction_conversation)],
@@ -216,6 +232,10 @@ def main():
 
     # Instruction management callbacks
     app.add_handler(CallbackQueryHandler(instructions_list_handler, pattern="^instructions_list$"))
+    app.add_handler(CallbackQueryHandler(instructions_edit_handler, pattern="^instructions_edit$"))
+    app.add_handler(CallbackQueryHandler(instructions_reorder_handler, pattern="^instructions_reorder$"))
+    app.add_handler(CallbackQueryHandler(edit_bank_stages_handler, pattern="^edit_bank_stages_.*$"))
+    app.add_handler(CallbackQueryHandler(reorder_bank_stages_handler, pattern="^reorder_bank_.*$|^reorder_stages_.*$"))
     app.add_handler(CallbackQueryHandler(instruction_add_another_handler, pattern="^instr_add_another$"))
 
     # Add sync callback handler

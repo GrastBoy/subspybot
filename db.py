@@ -324,10 +324,20 @@ def ensure_schema():
     )
     # Migrations for banks table
     _ensure_columns("banks",
-                    ["price", "description"],
+                    ["price", "description", "min_age"],
         {
             "price": "ALTER TABLE banks ADD COLUMN price TEXT",
-            "description": "ALTER TABLE banks ADD COLUMN description TEXT"
+            "description": "ALTER TABLE banks ADD COLUMN description TEXT",
+            "min_age": "ALTER TABLE banks ADD COLUMN min_age INTEGER DEFAULT 18"
+        }
+    )
+    # Migrations for bank_instructions table to support stage types
+    _ensure_columns("bank_instructions",
+                    ["step_type", "step_data", "step_order"],
+        {
+            "step_type": "ALTER TABLE bank_instructions ADD COLUMN step_type TEXT DEFAULT 'text_screenshots'",
+            "step_data": "ALTER TABLE bank_instructions ADD COLUMN step_data TEXT",  # JSON for stage-specific config
+            "step_order": "ALTER TABLE bank_instructions ADD COLUMN step_order INTEGER DEFAULT 0"
         }
     )
     _ensure_indexes()
@@ -501,18 +511,18 @@ def create_order_form(order_id: int, form_data: dict):
     except Exception as e:
         logger.warning("create_order_form failed: %s", e)
 
-def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, price: str = None, description: str = None) -> bool:
+def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, price: str = None, description: str = None, min_age: int = 18) -> bool:
     """Add a new bank"""
     try:
-        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled, price, description) VALUES (?,?,?,?,?)",
-                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description))
+        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled, price, description, min_age) VALUES (?,?,?,?,?,?)",
+                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description, min_age))
         conn.commit()
         return True
     except Exception as e:
         logger.warning("add_bank failed: %s", e)
         return False
 
-def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None, price: str = None, description: str = None) -> bool:
+def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None, price: str = None, description: str = None, min_age: int = None) -> bool:
     """Update bank settings"""
     try:
         updates = []
@@ -532,6 +542,9 @@ def update_bank(name: str, register_enabled: bool = None, change_enabled: bool =
         if description is not None:
             updates.append("description=?")
             params.append(description)
+        if min_age is not None:
+            updates.append("min_age=?")
+            params.append(min_age)
 
         if updates:
             params.append(name)
@@ -556,38 +569,49 @@ def delete_bank(name: str) -> bool:
 
 def add_bank_instruction(bank_name: str, action: str, step_number: int,
                         instruction_text: str = None, instruction_images: list = None,
-                        age_requirement: int = None, required_photos: int = None) -> bool:
-    """Add bank instruction"""
+                        age_requirement: int = None, required_photos: int = None,
+                        step_type: str = "text_screenshots", step_data: dict = None,
+                        step_order: int = None) -> bool:
+    """Add bank instruction with enhanced stage support"""
     import json
     try:
         images_json = json.dumps(instruction_images or [])
+        step_data_json = json.dumps(step_data or {})
+        
+        # If step_order is not provided, set it to step_number for backward compatibility
+        if step_order is None:
+            step_order = step_number
+        
         cursor.execute("""
             INSERT INTO bank_instructions
-            (bank_name, action, step_number, instruction_text, instruction_images, age_requirement, required_photos)
-            VALUES (?,?,?,?,?,?,?)
-        """, (bank_name, action, step_number, instruction_text, images_json, age_requirement, required_photos))
+            (bank_name, action, step_number, instruction_text, instruction_images, age_requirement, required_photos, step_type, step_data, step_order)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (bank_name, action, step_number, instruction_text, images_json, age_requirement, required_photos, step_type, step_data_json, step_order))
         conn.commit()
         return True
+    except Exception as e:
+        logger.warning("add_bank_instruction failed: %s", e)
+        return False
     except Exception as e:
         logger.warning("add_bank_instruction failed: %s", e)
         return False
 
 def get_banks():
     """Get all banks"""
-    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description FROM banks ORDER BY name")
+    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age FROM banks ORDER BY name")
     return cursor.fetchall()
 
 def get_bank_instructions(bank_name: str, action: str = None):
-    """Get instructions for a bank"""
+    """Get instructions for a bank with enhanced stage support"""
     if action:
         cursor.execute("""
-            SELECT step_number, instruction_text, instruction_images, age_requirement, required_photos
-            FROM bank_instructions WHERE bank_name=? AND action=? ORDER BY step_number
+            SELECT step_number, instruction_text, instruction_images, age_requirement, required_photos, step_type, step_data, step_order
+            FROM bank_instructions WHERE bank_name=? AND action=? ORDER BY step_order, step_number
         """, (bank_name, action))
     else:
         cursor.execute("""
-            SELECT action, step_number, instruction_text, instruction_images, age_requirement, required_photos
-            FROM bank_instructions WHERE bank_name=? ORDER BY action, step_number
+            SELECT action, step_number, instruction_text, instruction_images, age_requirement, required_photos, step_type, step_data, step_order
+            FROM bank_instructions WHERE bank_name=? ORDER BY action, step_order, step_number
         """, (bank_name,))
     return cursor.fetchall()
 
@@ -725,6 +749,118 @@ def close_db():
     except Exception:
         pass
     _cleanup_lock()
+
+
+# Enhanced instruction management functions for stage-based system
+
+def get_stage_types():
+    """Get available stage types"""
+    return {
+        'text_screenshots': {
+            'name': 'Текст + скріни',
+            'description': 'Пояснення для користувача + приклади скріншотів',
+            'fields': ['text', 'example_images']
+        },
+        'data_delivery': {
+            'name': 'Видача даних (через менеджера)',
+            'description': 'Бот/система координує видачу кодів менеджером',
+            'fields': ['phone_required', 'email_required']
+        },
+        'user_data_request': {
+            'name': 'Запит даних від користувача',
+            'description': 'Збір даних від користувача (телефон, пошта, ПІБ, нік тощо)',
+            'fields': ['data_fields']
+        }
+    }
+
+def update_bank_instruction(bank_name: str, action: str, step_number: int, **kwargs) -> bool:
+    """Update existing bank instruction"""
+    import json
+    try:
+        updates = []
+        params = []
+        
+        allowed_fields = ['instruction_text', 'instruction_images', 'age_requirement', 
+                         'required_photos', 'step_type', 'step_data', 'step_order']
+        
+        for field, value in kwargs.items():
+            if field in allowed_fields:
+                if field in ['instruction_images', 'step_data'] and isinstance(value, (list, dict)):
+                    value = json.dumps(value)
+                updates.append(f"{field}=?")
+                params.append(value)
+        
+        if updates:
+            params.extend([bank_name, action, step_number])
+            cursor.execute(
+                f"UPDATE bank_instructions SET {','.join(updates)} WHERE bank_name=? AND action=? AND step_number=?", 
+                params
+            )
+            conn.commit()
+            return True
+        return False
+    except Exception as e:
+        logger.warning("update_bank_instruction failed: %s", e)
+        return False
+
+def delete_bank_instruction(bank_name: str, action: str, step_number: int) -> bool:
+    """Delete bank instruction"""
+    try:
+        cursor.execute("DELETE FROM bank_instructions WHERE bank_name=? AND action=? AND step_number=?",
+                      (bank_name, action, step_number))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("delete_bank_instruction failed: %s", e)
+        return False
+
+def reorder_bank_instructions(bank_name: str, action: str, new_order: list) -> bool:
+    """Reorder bank instructions. new_order is list of step_numbers in desired order"""
+    try:
+        for index, step_number in enumerate(new_order):
+            cursor.execute(
+                "UPDATE bank_instructions SET step_order=? WHERE bank_name=? AND action=? AND step_number=?",
+                (index + 1, bank_name, action, step_number)
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("reorder_bank_instructions failed: %s", e)
+        return False
+
+def get_bank_min_age(bank_name: str) -> int:
+    """Get minimum age requirement for a bank"""
+    try:
+        cursor.execute("SELECT min_age FROM banks WHERE name=?", (bank_name,))
+        result = cursor.fetchone()
+        return result[0] if result else 18
+    except Exception as e:
+        logger.warning("get_bank_min_age failed: %s", e)
+        return 18
+
+def get_instruction_by_id(instruction_id: int):
+    """Get single instruction by ID"""
+    try:
+        cursor.execute("""
+            SELECT id, bank_name, action, step_number, instruction_text, instruction_images, 
+                   age_requirement, required_photos, step_type, step_data, step_order
+            FROM bank_instructions WHERE id=?
+        """, (instruction_id,))
+        return cursor.fetchone()
+    except Exception as e:
+        logger.warning("get_instruction_by_id failed: %s", e)
+        return None
+
+def get_next_step_number(bank_name: str, action: str) -> int:
+    """Get next available step number for bank and action"""
+    try:
+        cursor.execute("SELECT MAX(step_number) FROM bank_instructions WHERE bank_name=? AND action=?",
+                      (bank_name, action))
+        result = cursor.fetchone()
+        return (result[0] or 0) + 1
+    except Exception as e:
+        logger.warning("get_next_step_number failed: %s", e)
+        return 1
 
 logger.info("Database initialized at %s", os.path.abspath(DB_FILE))
 logger.info(
