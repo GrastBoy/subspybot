@@ -3,7 +3,7 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import ADMIN_ID, conn, cursor, is_admin, logger, add_admin_db, remove_admin_db, list_admins_db
+from db import ADMIN_ID, conn, cursor, is_admin, logger, add_admin_db, remove_admin_db, list_admins_db, ensure_requisites_stages_for_all_banks
 from handlers.photo_handlers import (
     assign_queued_clients_to_free_groups,
     free_group_db_by_chatid,
@@ -618,3 +618,24 @@ async def active_orders_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show active orders for current group"""
     from handlers.multi_order_management import show_active_orders
     await show_active_orders(update, context)
+
+async def add_requisites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add requisites stages to all banks that don't have them"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас немає прав для цієї команди.")
+        return
+    
+    try:
+        added_count = ensure_requisites_stages_for_all_banks()
+        
+        if added_count > 0:
+            text = f"✅ <b>Додано {added_count} етапів реквізитів</b>\n\n"
+            text += "Тепер усі активні банки мають фінальний етап для збору реквізитів користувачів."
+        else:
+            text = "ℹ️ Усі активні банки вже мають етапи реквізитів або немає активних банків."
+        
+        await update.message.reply_text(text, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.warning("add_requisites_cmd failed: %s", e)
+        await update.message.reply_text("❌ Помилка при додаванні етапів реквізитів")

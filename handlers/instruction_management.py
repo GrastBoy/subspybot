@@ -166,16 +166,28 @@ async def instruction_action_select_handler(update: Update, context: ContextType
     # Show stage type selection
     stage_types = get_stage_types()
     
-    text = "🎭 <b>Оберіть тип етапу</b>\n\n"
+    text = "🎭 <b>Який тип етапу ви хочете створити?</b>\n\n"
     text += f"🏦 Банк: {bank_name}\n"
     text += f"🔄 Тип операції: {action_text}\n"
     text += f"📋 Етап: {next_step}\n\n"
-    text += "Доступні типи етапів:\n\n"
+    text += "📖 <b>Оберіть тип етапу:</b>\n\n"
 
     keyboard = []
     for stage_type, info in stage_types.items():
-        text += f"<b>{info['name']}</b>\n{info['description']}\n\n"
-        keyboard.append([InlineKeyboardButton(info['name'], callback_data=f"stage_type_{stage_type}")])
+        # Add emoji based on stage type
+        emoji = ""
+        if stage_type == "text_screenshots":
+            emoji = "📝📸 "
+        elif stage_type == "data_delivery":
+            emoji = "📞📧 "
+        elif stage_type == "user_data_request":
+            emoji = "👤📋 "
+        elif stage_type == "requisites_request":
+            emoji = "💰💳 "
+        
+        text += f"{emoji}<b>{info['name']}</b>\n"
+        text += f"📄 {info['description']}\n\n"
+        keyboard.append([InlineKeyboardButton(f"{emoji}{info['name']}", callback_data=f"stage_type_{stage_type}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="instr_bank_" + bank_name)])
 
@@ -280,6 +292,17 @@ async def stage_type_select_handler(update: Update, context: ContextTypes.DEFAUL
         
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         return INSTR_STAGE_CONFIG
+        
+    elif stage_type == 'requisites_request':
+        text = "💰 <b>Налаштування етапу 'Запит реквізитів'</b>\n\n"
+        text += f"🏦 Банк: {bank_name}\n"
+        text += f"🔄 Операція: {action_text}\n"
+        text += f"📋 Етап: {step}\n\n"
+        text += "Введіть текст інструкції для користувача щодо надання реквізитів:"
+        
+        context.user_data['instr_stage_subtype'] = 'requisites'
+        await query.edit_message_text(text, parse_mode='HTML')
+        return INSTR_TEXT_INPUT
     
     return ConversationHandler.END
 
@@ -396,7 +419,7 @@ async def stage_config_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     return INSTR_STAGE_CONFIG
 
 async def instruction_text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle instruction text input for text+screenshots stages"""
+    """Handle instruction text input for text+screenshots and requisites stages"""
     text = update.message.text.strip()
 
     if not text:
@@ -407,17 +430,28 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
     action = context.user_data.get('instr_action')
     step = context.user_data.get('instr_step')
     stage_type = context.user_data.get('instr_stage_type', 'text_screenshots')
+    stage_subtype = context.user_data.get('instr_stage_subtype')
 
     if not all([bank_name, action, step]):
         await update.message.reply_text("❌ Помилка: відсутні дані. Почніть заново.")
         return ConversationHandler.END
 
-    # Create stage data for text+screenshots
-    step_data = {
-        'text': text,
-        'example_images': [],
-        'required_photos': 1
-    }
+    # Create stage data based on stage type
+    if stage_type == 'requisites_request':
+        step_data = {
+            'requisites_text': text,
+            'required_requisites': ['card_number', 'card_holder_name'],
+            'instruction_text': text
+        }
+        stage_display_name = "Запит реквізитів"
+    else:
+        # Default: text+screenshots
+        step_data = {
+            'text': text,
+            'example_images': [],
+            'required_photos': 1
+        }
+        stage_display_name = "Текст + скріни"
 
     # Save instruction with enhanced stage support
     success = add_bank_instruction(
@@ -440,7 +474,7 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
             [InlineKeyboardButton("✅ Завершити", callback_data="instructions_menu")]
         ]
 
-        text_response = "✅ <b>Етап 'Текст + скріни' створено!</b>\n\n"
+        text_response = f"✅ <b>Етап '{stage_display_name}' створено!</b>\n\n"
         text_response += f"🏦 Банк: {bank_name}\n"
         text_response += f"🔄 Тип: {action_text}\n"
         text_response += f"📋 Етап: {step}\n\n"
@@ -457,6 +491,7 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
     context.user_data.pop('instr_action', None)
     context.user_data.pop('instr_step', None)
     context.user_data.pop('instr_stage_type', None)
+    context.user_data.pop('instr_stage_subtype', None)
 
     return ConversationHandler.END
 

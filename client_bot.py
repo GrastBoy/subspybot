@@ -15,6 +15,7 @@ from handlers.admin_handlers import (
     add_bank_cmd,
     add_bank_group_cmd,
     add_group,
+    add_requisites_cmd,
     admin_help,
     bank_hide,
     bank_management_cmd,
@@ -294,6 +295,7 @@ def main():
     app.add_handler(CommandHandler("order_form", order_form_cmd))
     app.add_handler(CommandHandler("list_forms", list_forms_cmd))
     app.add_handler(CommandHandler("active_orders", active_orders_cmd))
+    app.add_handler(CommandHandler("add_requisites", add_requisites_cmd))
     app.add_handler(CommandHandler("manage_instructions", manage_bank_instructions_cmd))
     app.add_handler(CommandHandler("sync_instructions", sync_instructions_to_file_cmd))
     app.add_handler(CommandHandler("migrate_instructions", migrate_instructions_from_file_cmd))
