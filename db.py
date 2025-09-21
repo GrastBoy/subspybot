@@ -770,18 +770,23 @@ def get_stage_types():
     return {
         'text_screenshots': {
             'name': 'Текст + скріни',
-            'description': 'Пояснення для користувача + приклади скріншотів',
+            'description': 'Етап з текстовим поясненням та прикладами скріншотів. Користувач отримує інструкцію з поясненням що робити та приклади скрінів.',
             'fields': ['text', 'example_images']
         },
         'data_delivery': {
             'name': 'Видача даних (через менеджера)',
-            'description': 'Бот/система координує видачу кодів менеджером',
+            'description': 'Етап автоматичної координації з менеджером для отримання номеру телефону та email. Користувач натискає кнопку запиту даних, менеджер видає коди.',
             'fields': ['phone_required', 'email_required']
         },
         'user_data_request': {
             'name': 'Запит даних від користувача',
-            'description': 'Збір даних від користувача (телефон, пошта, ПІБ, нік тощо)',
+            'description': 'Етап збору персональних даних від користувача (телефон, пошта, ПІБ, нік Telegram тощо). Менеджер налаштовує які поля потрібно зібрати.',
             'fields': ['data_fields']
+        },
+        'requisites_request': {
+            'name': 'Запит реквізитів для переказу',
+            'description': 'Фінальний етап для всіх інструкцій - користувач надає реквізити куди потрібно перерахувати кошти після завершення реєстрації.',
+            'fields': ['requisites_text', 'required_requisites']
         }
     }
 
@@ -886,6 +891,65 @@ def get_next_step_number(bank_name: str, action: str) -> int:
     except Exception as e:
         logger.warning("get_next_step_number failed: %s", e)
         return 1
+
+def add_default_requisites_stage(bank_name: str, action: str) -> bool:
+    """Add default requisites stage as final stage for a bank action"""
+    try:
+        # Check if requisites stage already exists
+        cursor.execute("""
+            SELECT id FROM bank_instructions 
+            WHERE bank_name=? AND action=? AND step_type='requisites_request'
+        """, (bank_name, action))
+        
+        if cursor.fetchone():
+            return False  # Already exists, no need to add
+        
+        # Get next step number
+        next_step = get_next_step_number(bank_name, action)
+        
+        # Add requisites stage
+        requisites_text = "Будь ласка, надайте реквізити картки для переказу коштів після завершення реєстрації:\n\n• Номер картки\n• ПІБ власника картки"
+        step_data = {
+            'requisites_text': requisites_text,
+            'required_requisites': ['card_number', 'card_holder_name'],
+            'instruction_text': requisites_text
+        }
+        
+        return add_bank_instruction(
+            bank_name=bank_name,
+            action=action,
+            step_number=next_step,
+            instruction_text=requisites_text,
+            step_type='requisites_request',
+            step_data=step_data
+        )
+    except Exception as e:
+        logger.warning("add_default_requisites_stage failed: %s", e)
+        return False
+
+def ensure_requisites_stages_for_all_banks() -> int:
+    """Ensure all active banks have requisites stages for enabled actions"""
+    added_count = 0
+    try:
+        # Get all active banks
+        cursor.execute("SELECT name, register_enabled, change_enabled FROM banks WHERE is_active=1")
+        banks = cursor.fetchall()
+        
+        for bank_name, register_enabled, change_enabled in banks:
+            if register_enabled:
+                if add_default_requisites_stage(bank_name, "register"):
+                    logger.info("Added requisites stage for %s register", bank_name)
+                    added_count += 1
+            
+            if change_enabled:
+                if add_default_requisites_stage(bank_name, "change"):
+                    logger.info("Added requisites stage for %s change", bank_name)
+                    added_count += 1
+        
+        return added_count
+    except Exception as e:
+        logger.warning("ensure_requisites_stages_for_all_banks failed: %s", e)
+        return 0
 
 logger.info("Database initialized at %s", os.path.abspath(DB_FILE))
 logger.info(
