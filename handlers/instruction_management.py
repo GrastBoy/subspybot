@@ -10,7 +10,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 from db import (
     add_bank_instruction, get_bank_instructions, get_banks, is_admin, log_action,
     get_stage_types, update_bank_instruction, delete_bank_instruction, 
-    reorder_bank_instructions, get_next_step_number, get_instruction_by_id
+    reorder_bank_instructions, get_next_step_number, get_instruction_by_id,
+    get_instruction_by_step
 )
 
 logger = logging.getLogger(__name__)
@@ -544,6 +545,139 @@ async def edit_bank_stages_handler(update: Update, context: ContextTypes.DEFAULT
     ])
 
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def edit_stage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle editing individual instruction stage"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+    
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse callback data: edit_stage_{bank_name}_{action}_{step_number}
+    try:
+        parts = query.data.split("_", 3)
+        if len(parts) < 4:
+            await query.edit_message_text("❌ Некоректні дані")
+            return
+            
+        bank_name = parts[2]
+        action_step = parts[3]
+        
+        # Split action and step_number
+        if "_" in action_step:
+            action, step_number_str = action_step.rsplit("_", 1)
+            step_number = int(step_number_str)
+        else:
+            await query.edit_message_text("❌ Некоректний формат даних")
+            return
+            
+    except (ValueError, IndexError) as e:
+        await query.edit_message_text("❌ Помилка парсингу даних")
+        return
+    
+    # Get the instruction
+    instruction = get_instruction_by_step(bank_name, action, step_number)
+    if not instruction:
+        await query.edit_message_text("❌ Етап не знайдено")
+        return
+    
+    # Parse instruction data
+    (instr_id, bank, act, step_num, text, images_json, age_req, 
+     req_photos, step_type, step_data, step_order) = instruction
+    
+    import json
+    images = json.loads(images_json) if images_json else []
+    stage_data = json.loads(step_data) if step_data else {}
+    
+    # Get stage types for display
+    stage_types = get_stage_types()
+    stage_name = stage_types.get(step_type, {}).get('name', step_type)
+    
+    # Build the edit interface
+    text_display = f"✏️ <b>Редагування етапу</b>\n\n"
+    text_display += f"🏦 Банк: {bank_name}\n"
+    text_display += f"🔄 Дія: {'Реєстрація' if action == 'register' else 'Перевʼязка'}\n"
+    text_display += f"📋 Тип етапу: {stage_name}\n"
+    text_display += f"📊 Порядок: {step_order}\n\n"
+    
+    if text:
+        text_display += f"📝 <b>Текст:</b>\n{text[:200]}{'...' if len(text) > 200 else ''}\n\n"
+    
+    if images:
+        text_display += f"🖼️ Зображень: {len(images)}\n\n"
+    
+    if age_req:
+        text_display += f"🔞 Віковi вимоги: {age_req} років\n"
+    
+    if req_photos:
+        text_display += f"📷 Потрібно фото: {req_photos}\n"
+    
+    # Create edit options
+    keyboard = [
+        [InlineKeyboardButton("📝 Змінити текст", callback_data=f"edit_field_text_{bank_name}_{action}_{step_number}")],
+        [InlineKeyboardButton("🖼️ Змінити зображення", callback_data=f"edit_field_images_{bank_name}_{action}_{step_number}")],
+        [InlineKeyboardButton("🔞 Змінити вікові вимоги", callback_data=f"edit_field_age_{bank_name}_{action}_{step_number}")],
+        [InlineKeyboardButton("📷 Змінити к-сть фото", callback_data=f"edit_field_photos_{bank_name}_{action}_{step_number}")],
+        [InlineKeyboardButton("🗑️ Очистити текст і зображення", callback_data=f"clear_stage_content_{bank_name}_{action}_{step_number}")],
+        [InlineKeyboardButton("❌ Видалити етап", callback_data=f"delete_stage_{bank_name}_{action}_{step_number}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"edit_bank_stages_{bank_name}")]
+    ]
+    
+    await query.edit_message_text(text_display, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+async def clear_stage_content_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle clearing text and images from stage"""
+    if not is_admin(update.effective_user.id):
+        return await update.callback_query.answer("⛔ Немає доступу")
+    
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse callback data: clear_stage_content_{bank_name}_{action}_{step_number}
+    try:
+        parts = query.data.split("_", 4)
+        if len(parts) < 5:
+            await query.edit_message_text("❌ Некоректні дані")
+            return
+            
+        bank_name = parts[3]
+        action_step = parts[4]
+        
+        # Split action and step_number
+        if "_" in action_step:
+            action, step_number_str = action_step.rsplit("_", 1)
+            step_number = int(step_number_str)
+        else:
+            await query.edit_message_text("❌ Некоректний формат даних")
+            return
+            
+    except (ValueError, IndexError) as e:
+        await query.edit_message_text("❌ Помилка парсингу даних")
+        return
+    
+    # Clear text and images
+    success = update_bank_instruction(
+        bank_name, action, step_number,
+        instruction_text="",
+        instruction_images=[]
+    )
+    
+    if success:
+        log_action(0, f"admin_{update.effective_user.id}", "clear_stage_content", 
+                  f"{bank_name}_{action}_{step_number}")
+        await query.edit_message_text(
+            f"✅ Текст і зображення етапу очищено!\n\n"
+            f"🏦 Банк: {bank_name}\n"
+            f"🔄 Дія: {'Реєстрація' if action == 'register' else 'Перевʼязка'}\n"
+            f"📋 Етап: {step_number}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад до етапу", callback_data=f"edit_stage_{bank_name}_{action}_{step_number}")],
+                [InlineKeyboardButton("🔙 До списку етапів", callback_data=f"edit_bank_stages_{bank_name}")]
+            ])
+        )
+    else:
+        await query.edit_message_text("❌ Помилка при очищенні етапу")
 
 async def instructions_reorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start reordering instruction stages"""
