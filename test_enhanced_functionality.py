@@ -30,6 +30,13 @@ def test_bank_management():
     """Test bank management functionality"""
     print("🏦 Testing bank management...")
 
+    # Clean up any existing test banks first
+    test_banks = ["Test Bank Alpha", "Test Bank Beta"]
+    for bank in test_banks:
+        cursor.execute("DELETE FROM bank_instructions WHERE bank_name=?", (bank,))
+        cursor.execute("DELETE FROM banks WHERE name=?", (bank,))
+    conn.commit()
+
     # Test adding banks
     assert add_bank("Test Bank Alpha", True, True), "Failed to add bank"
     assert add_bank("Test Bank Beta", True, False), "Failed to add bank with limited actions"
@@ -72,6 +79,11 @@ def test_data_uniqueness():
     """Test data uniqueness checking"""
     print("🔍 Testing data uniqueness...")
 
+    # Clean up any existing test data first
+    cursor.execute("DELETE FROM bank_data_usage WHERE phone_number='+380991234567' OR email='unique@test.com'")
+    cursor.execute("DELETE FROM orders WHERE user_id=99999")
+    conn.commit()
+
     # Create test order
     cursor.execute('INSERT INTO orders (user_id, username, bank, action, stage, status) VALUES (?, ?, ?, ?, ?, ?)',
                    (99999, 'uniquetest', 'Test Bank Alpha', 'register', 0, 'В обробці'))
@@ -101,6 +113,12 @@ def test_data_uniqueness():
 def test_group_management():
     """Test manager group management"""
     print("👥 Testing group management...")
+
+    # Clean up any existing test groups first
+    test_group_ids = [-1001111111111, -1001111111112, -1001111111113]
+    for group_id in test_group_ids:
+        cursor.execute("DELETE FROM manager_groups WHERE group_id=?", (group_id,))
+    conn.commit()
 
     # Add different types of groups
     assert add_manager_group(-1001111111111, "Alpha Bank Group", "Test Bank Alpha", False), "Failed to add bank group"
@@ -233,6 +251,9 @@ def run_all_tests():
         test_edge_cases()
         test_admin_interface()
 
+        # Cleanup test data
+        cleanup_test_data()
+
         print("\n🎉 All tests passed successfully!")
         print("✅ Enhanced bot functionality is working correctly")
         print("✅ Unified admin interface is properly integrated")
@@ -241,9 +262,61 @@ def run_all_tests():
         print(f"\n❌ Test failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        # Cleanup on failure too
+        cleanup_test_data()
 
-    return True
+
+def cleanup_test_data():
+    """Clean up all test data"""
+    test_banks = ["Test Bank Alpha", "Test Bank Beta"]
+    for bank in test_banks:
+        cursor.execute("DELETE FROM bank_instructions WHERE bank_name=?", (bank,))
+        cursor.execute("DELETE FROM banks WHERE name=?", (bank,))
+    
+    # Clean up test orders and related data
+    test_user_ids = [77777, 88888, 88889, 99999]
+    for user_id in test_user_ids:
+        cursor.execute("DELETE FROM orders WHERE user_id=?", (user_id,))
+        cursor.execute("DELETE FROM bank_data_usage WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)", (user_id,))
+    
+    # Clean up test data usage
+    cursor.execute("DELETE FROM bank_data_usage WHERE phone_number IN ('+380501234567', '+380991234567') OR email IN ('test@example.com', 'unique@test.com')")
+    
+    # Clean up test groups
+    test_group_ids = [-1001111111111, -1001111111112, -1001111111113]
+    for group_id in test_group_ids:
+        cursor.execute("DELETE FROM manager_groups WHERE group_id=?", (group_id,))
+    
+    conn.commit()
+
+
+def run_all_tests():
+    """Run all tests"""
+    try:
+        test_bank_management()
+        test_instruction_management()
+        test_data_uniqueness()
+        test_group_management()
+        test_multi_order_management()
+        test_order_forms()
+        test_edge_cases()
+        test_admin_interface()
+
+        # Cleanup test data
+        cleanup_test_data()
+
+        print("\n🎉 All tests passed successfully!")
+        print("✅ Enhanced bot functionality is working correctly")
+        print("✅ Unified admin interface is properly integrated")
+        return True
+
+    except Exception as e:
+        print(f"\n❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        # Cleanup on failure too
+        cleanup_test_data()
+        return False
 
 if __name__ == "__main__":
     success = run_all_tests()
