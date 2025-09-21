@@ -391,7 +391,7 @@ async def edit_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "✏️ <b>Редагувати банк</b>\n\nОберіть банк для редагування:"
         keyboard = []
-        for name, is_active, register_enabled, change_enabled, price, description in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
             status = "✅" if is_active else "❌"
             keyboard.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"edit_bank_{name}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")])
@@ -414,7 +414,7 @@ async def delete_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         text = "🗑️ <b>Видалити банк</b>\n\n⚠️ <b>Увага!</b> Видалення банку призведе до видалення всіх його інструкцій.\n\nОберіть банк для видалення:"
         keyboard = []
-        for name, is_active, register_enabled, change_enabled, price, description in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
             keyboard.append([InlineKeyboardButton(f"🗑️ {name}", callback_data=f"delete_bank_{name}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")])
 
@@ -434,16 +434,16 @@ async def edit_bank_settings_handler(update: Update, context: ContextTypes.DEFAU
     # Get current bank settings
     banks = get_banks()
     bank_data = None
-    for name, is_active, register_enabled, change_enabled, price, description in banks:
+    for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
         if name == bank_name:
-            bank_data = (is_active, register_enabled, change_enabled, price, description)
+            bank_data = (is_active, register_enabled, change_enabled, price, description, min_age)
             break
     
     if not bank_data:
         await query.edit_message_text("❌ Банк не знайдено")
         return
 
-    is_active, register_enabled, change_enabled, price, description = bank_data
+    is_active, register_enabled, change_enabled, price, description, min_age = bank_data
     
     active_status = "✅ Активний" if is_active else "❌ Неактивний"
     register_status = "✅ Увімкнена" if register_enabled else "❌ Вимкнена"
@@ -485,7 +485,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_active = None
-        for name, is_active, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _ in banks:
             if name == bank_name:
                 current_active = is_active
                 break
@@ -504,7 +504,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_register = None
-        for name, _, register_enabled, _, _, _ in banks:
+        for name, _, register_enabled, _, _, _, _ in banks:
             if name == bank_name:
                 current_register = register_enabled
                 break
@@ -523,7 +523,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_change = None
-        for name, _, _, change_enabled, _, _ in banks:
+        for name, _, _, change_enabled, _, _, _ in banks:
             if name == bank_name:
                 current_change = change_enabled
                 break
@@ -655,11 +655,11 @@ async def add_bank_group_handler(update: Update, context: ContextTypes.DEFAULT_T
     else:
         text = "➕ <b>Додати групу для банку</b>\n\nОберіть банк для якого додати групу:"
         keyboard = []
-        for name, is_active, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _ in banks:
             if is_active:  # Only show active banks
                 keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"select_bank_for_group_{name}")])
         
-        if not any(is_active for _, is_active, _, _, _, _ in banks):
+        if not any(is_active for _, is_active, _, _, _, _, _ in banks):
             text = "➕ <b>Додати групу для банку</b>\n\n❌ Немає активних банків.\nСпочатку активуйте хоча б один банк."
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")])
@@ -874,7 +874,7 @@ async def form_templates_list_handler(update: Update, context: ContextTypes.DEFA
     if not banks:
         text += "❌ Немає зареєстрованих банків"
     else:
-        for name, is_active, register_enabled, change_enabled, price, description in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
             template = get_bank_form_template(name)
             if template:
                 field_count = len(template.get('fields', []))
@@ -906,7 +906,7 @@ async def form_templates_create_handler(update: Update, context: ContextTypes.DE
     else:
         text = "➕ <b>Створити шаблон анкети</b>\n\nОберіть банк для якого створити шаблон:"
         keyboard = []
-        for name, is_active, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _ in banks:
             keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"create_template_{name}")])
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")])
@@ -931,7 +931,7 @@ async def form_templates_edit_handler(update: Update, context: ContextTypes.DEFA
         keyboard = []
         has_templates = False
         
-        for name, is_active, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _ in banks:
             template = get_bank_form_template(name)
             if template:
                 has_templates = True
@@ -963,7 +963,7 @@ async def form_templates_delete_handler(update: Update, context: ContextTypes.DE
         keyboard = []
         has_templates = False
         
-        for name, is_active, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _ in banks:
             template = get_bank_form_template(name)
             if template:
                 has_templates = True

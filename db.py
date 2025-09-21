@@ -601,6 +601,18 @@ def get_banks():
     cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age FROM banks ORDER BY name")
     return cursor.fetchall()
 
+def get_bank_details(bank_name: str):
+    """Get specific bank details (price, description, min_age)"""
+    cursor.execute("SELECT price, description, min_age FROM banks WHERE name=?", (bank_name,))
+    result = cursor.fetchone()
+    if result:
+        return {
+            'price': result[0],
+            'description': result[1],
+            'min_age': result[2] or 18  # Default to 18 if None
+        }
+    return None
+
 def get_bank_instructions(bank_name: str, action: str = None):
     """Get instructions for a bank with enhanced stage support"""
     if action:
