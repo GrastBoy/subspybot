@@ -209,6 +209,8 @@ def main():
         instructions_edit_handler,
         instructions_reorder_handler,
         edit_bank_stages_handler,
+        edit_stage_handler,
+        clear_stage_content_handler,
         reorder_bank_stages_handler,
         stage_type_select_handler,
         stage_config_handler,
@@ -235,6 +237,8 @@ def main():
     app.add_handler(CallbackQueryHandler(instructions_edit_handler, pattern="^instructions_edit$"))
     app.add_handler(CallbackQueryHandler(instructions_reorder_handler, pattern="^instructions_reorder$"))
     app.add_handler(CallbackQueryHandler(edit_bank_stages_handler, pattern="^edit_bank_stages_.*$"))
+    app.add_handler(CallbackQueryHandler(edit_stage_handler, pattern="^edit_stage_.*$"))
+    app.add_handler(CallbackQueryHandler(clear_stage_content_handler, pattern="^clear_stage_content_.*$"))
     app.add_handler(CallbackQueryHandler(reorder_bank_stages_handler, pattern="^reorder_bank_.*$|^reorder_stages_.*$"))
     app.add_handler(CallbackQueryHandler(instruction_add_another_handler, pattern="^instr_add_another$"))
 

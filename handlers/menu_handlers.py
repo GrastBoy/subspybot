@@ -2,7 +2,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from db import cursor, get_banks
+from db import cursor, get_banks, get_bank_details
 from handlers.photo_handlers import assign_group_or_queue, create_order_in_db, send_instruction
 from states import find_age_requirement, user_states
 
@@ -14,7 +14,7 @@ def _banks_from_instructions(action: str):
     banks = get_banks()
     result = []
     
-    for bank_name, is_active, register_enabled, change_enabled, _, _ in banks:
+    for bank_name, is_active, register_enabled, change_enabled, _, _, _ in banks:
         if not is_active:
             continue
             
@@ -89,13 +89,35 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data in ("type_register", "type_change"):
         action = "register" if data == "type_register" else "change"
         banks = _get_visible_banks(action)
-        keyboard = [[InlineKeyboardButton(bank, callback_data=f"bank_{bank}_{action}")] for bank in banks]
+        keyboard = []
+        
+        for bank in banks:
+            # Get bank details to show price and age warning
+            bank_details = get_bank_details(bank)
+            button_text = bank
+            
+            # Add indicators for price and age requirements
+            if bank_details:
+                indicators = []
+                if bank_details.get('price'):
+                    indicators.append("💰")
+                if bank_details.get('min_age', 18) > 18:
+                    indicators.append("🔞")
+                if indicators:
+                    button_text += f" {' '.join(indicators)}"
+            
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"bank_{bank}_{action}")])
+        
         keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_banks")])
+        
         if not banks:
             await query.edit_message_text("Наразі записи для цього типу відсутні. Спробуйте пізніше.",
                                           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="menu_banks")]]))
             return
-        await query.edit_message_text("Оберіть банк:", reply_markup=InlineKeyboardMarkup(keyboard))
+            
+        # Add explanation for indicators
+        explanation = "\n\n💰 - є ціна\n🔞 - підвищені вікові вимоги" if any(get_bank_details(bank) and (get_bank_details(bank).get('price') or (get_bank_details(bank).get('min_age', 18) > 18)) for bank in banks) else ""
+        await query.edit_message_text(f"Оберіть банк:{explanation}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     if data.startswith("bank_"):
@@ -106,16 +128,27 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         user_id = query.from_user.id
-        age_required = find_age_requirement(bank, action)
+        
+        # Get bank details from database instead of instructions
+        bank_details = get_bank_details(bank)
+        age_required = bank_details.get('min_age', 18) if bank_details else 18
+        price = bank_details.get('price') if bank_details else None
+        
         user_states[user_id] = {"order_id": None, "bank": bank, "action": action, "stage": 0, "age_required": age_required}
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Так, я відповідаю вимогам", callback_data="age_confirm_yes"),
              InlineKeyboardButton("Ні, я не підходжу", callback_data="age_confirm_no")]
         ])
-        text = f"Ви обрали банк {bank} ({'Реєстрація' if action == 'register' else 'Перевʼязка'}).\n"
-        if age_required:
-            text += f"📅 Вимога: мінімальний вік — {age_required} років.\n"
+        text = f"Ви обрали банк {bank} ({'Реєстрація' if action == 'register' else 'Перевʼязка'}).\n\n"
+        
+        # Show price if available
+        if price:
+            text += f"💰 Ціна: {price}\n"
+        
+        # Show minimum age requirement
+        text += f"🔞 Мінімальний вік: {age_required} років\n\n"
+        
         text += "Підтвердіть, будь ласка, що ви відповідаєте цим вимогам."
         await query.edit_message_text(text, reply_markup=keyboard)
         return

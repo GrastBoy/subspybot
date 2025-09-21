@@ -40,8 +40,8 @@ def test_bank_management():
 
     # Test getting banks
     banks = get_banks()
-    # Handle 6-column output (name, is_active, register_enabled, change_enabled, price, description)
-    bank_names = [name for name, _, _, _, _, _ in banks]
+    # Handle 7-column output (name, is_active, register_enabled, change_enabled, price, description, min_age)
+    bank_names = [name for name, _, _, _, _, _, _ in banks]
     assert "Test Bank Alpha" in bank_names, "Bank not found in list"
     assert "Test Bank Beta" in bank_names, "Bank not found in list"
 

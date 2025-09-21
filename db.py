@@ -601,6 +601,18 @@ def get_banks():
     cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age FROM banks ORDER BY name")
     return cursor.fetchall()
 
+def get_bank_details(bank_name: str):
+    """Get specific bank details (price, description, min_age)"""
+    cursor.execute("SELECT price, description, min_age FROM banks WHERE name=?", (bank_name,))
+    result = cursor.fetchone()
+    if result:
+        return {
+            'price': result[0],
+            'description': result[1],
+            'min_age': result[2] or 18  # Default to 18 if None
+        }
+    return None
+
 def get_bank_instructions(bank_name: str, action: str = None):
     """Get instructions for a bank with enhanced stage support"""
     if action:
@@ -849,6 +861,19 @@ def get_instruction_by_id(instruction_id: int):
         return cursor.fetchone()
     except Exception as e:
         logger.warning("get_instruction_by_id failed: %s", e)
+        return None
+
+def get_instruction_by_step(bank_name: str, action: str, step_number: int):
+    """Get single instruction by bank, action, and step_number"""
+    try:
+        cursor.execute("""
+            SELECT id, bank_name, action, step_number, instruction_text, instruction_images, 
+                   age_requirement, required_photos, step_type, step_data, step_order
+            FROM bank_instructions WHERE bank_name=? AND action=? AND step_number=?
+        """, (bank_name, action, step_number))
+        return cursor.fetchone()
+    except Exception as e:
+        logger.warning("get_instruction_by_step failed: %s", e)
         return None
 
 def get_next_step_number(bank_name: str, action: str) -> int:
