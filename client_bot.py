@@ -200,11 +200,14 @@ def main():
         INSTR_STAGE_TYPE_SELECT,
         INSTR_STAGE_CONFIG,
         INSTR_TEXT_INPUT,
+        INSTR_PHOTO_INPUT,
         cancel_instruction_conversation,
         instruction_action_select_handler,
         instruction_add_another_handler,
         instruction_bank_select_handler,
         instruction_text_input_handler,
+        instruction_photo_input_handler,
+        instruction_skip_photos_handler,
         instructions_add_handler,
         instructions_list_handler,
         instructions_edit_handler,
@@ -226,7 +229,11 @@ def main():
             INSTR_ACTION_SELECT: [CallbackQueryHandler(instruction_action_select_handler, pattern="^instr_action_.*$")],
             INSTR_STAGE_TYPE_SELECT: [CallbackQueryHandler(stage_type_select_handler, pattern="^stage_type_.*$")],
             INSTR_STAGE_CONFIG: [CallbackQueryHandler(stage_config_handler, pattern="^data_field_.*$|^data_fields_done$")],
-            INSTR_TEXT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, instruction_text_input_handler)]
+            INSTR_TEXT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, instruction_text_input_handler)],
+            INSTR_PHOTO_INPUT: [
+                MessageHandler(filters.PHOTO, instruction_photo_input_handler),
+                CallbackQueryHandler(instruction_skip_photos_handler, pattern="^(instr_skip_photos|instr_finish_photos)$")
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel_instruction_conversation)],
         per_chat=True

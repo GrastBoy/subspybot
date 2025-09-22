@@ -324,11 +324,15 @@ def ensure_schema():
     )
     # Migrations for banks table
     _ensure_columns("banks",
-                    ["price", "description", "min_age"],
+                    ["price", "description", "min_age", "register_price", "change_price", "register_min_age", "change_min_age"],
         {
             "price": "ALTER TABLE banks ADD COLUMN price TEXT",
             "description": "ALTER TABLE banks ADD COLUMN description TEXT",
-            "min_age": "ALTER TABLE banks ADD COLUMN min_age INTEGER DEFAULT 18"
+            "min_age": "ALTER TABLE banks ADD COLUMN min_age INTEGER DEFAULT 18",
+            "register_price": "ALTER TABLE banks ADD COLUMN register_price TEXT",
+            "change_price": "ALTER TABLE banks ADD COLUMN change_price TEXT", 
+            "register_min_age": "ALTER TABLE banks ADD COLUMN register_min_age INTEGER DEFAULT 18",
+            "change_min_age": "ALTER TABLE banks ADD COLUMN change_min_age INTEGER DEFAULT 18"
         }
     )
     # Migrations for bank_instructions table to support stage types
@@ -511,19 +515,29 @@ def create_order_form(order_id: int, form_data: dict):
     except Exception as e:
         logger.warning("create_order_form failed: %s", e)
 
-def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, price: str = None, description: str = None, min_age: int = 18) -> bool:
-    """Add a new bank"""
+def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, 
+             price: str = None, description: str = None, min_age: int = 18,
+             register_price: str = None, change_price: str = None,
+             register_min_age: int = None, change_min_age: int = None) -> bool:
+    """Add a new bank with optional action-specific pricing"""
     try:
-        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled, price, description, min_age) VALUES (?,?,?,?,?,?)",
-                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description, min_age))
+        cursor.execute("""
+            INSERT INTO banks (name, register_enabled, change_enabled, price, description, min_age, 
+                             register_price, change_price, register_min_age, change_min_age) 
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description, min_age,
+              register_price, change_price, register_min_age, change_min_age))
         conn.commit()
         return True
     except Exception as e:
         logger.warning("add_bank failed: %s", e)
         return False
 
-def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None, price: str = None, description: str = None, min_age: int = None) -> bool:
-    """Update bank settings"""
+def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, 
+                is_active: bool = None, price: str = None, description: str = None, 
+                min_age: int = None, register_price: str = None, change_price: str = None,
+                register_min_age: int = None, change_min_age: int = None) -> bool:
+    """Update bank settings with optional action-specific pricing"""
     try:
         updates = []
         params = []
@@ -545,6 +559,18 @@ def update_bank(name: str, register_enabled: bool = None, change_enabled: bool =
         if min_age is not None:
             updates.append("min_age=?")
             params.append(min_age)
+        if register_price is not None:
+            updates.append("register_price=?")
+            params.append(register_price)
+        if change_price is not None:
+            updates.append("change_price=?")
+            params.append(change_price)
+        if register_min_age is not None:
+            updates.append("register_min_age=?")
+            params.append(register_min_age)
+        if change_min_age is not None:
+            updates.append("change_min_age=?")
+            params.append(change_min_age)
 
         if updates:
             params.append(name)
@@ -598,18 +624,32 @@ def add_bank_instruction(bank_name: str, action: str, step_number: int,
 
 def get_banks():
     """Get all banks"""
-    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age FROM banks ORDER BY name")
+    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age, register_price, change_price, register_min_age, change_min_age FROM banks ORDER BY name")
     return cursor.fetchall()
 
-def get_bank_details(bank_name: str):
-    """Get specific bank details (price, description, min_age)"""
-    cursor.execute("SELECT price, description, min_age FROM banks WHERE name=?", (bank_name,))
+def get_bank_details(bank_name: str, action: str = None):
+    """Get specific bank details (price, description, min_age) - optionally action-specific"""
+    cursor.execute("SELECT price, description, min_age, register_price, change_price, register_min_age, change_min_age FROM banks WHERE name=?", (bank_name,))
     result = cursor.fetchone()
     if result:
+        price, description, min_age, register_price, change_price, register_min_age, change_min_age = result
+        
+        # If action is specified, use action-specific values, fall back to general values
+        if action == "register":
+            final_price = register_price or price
+            final_min_age = register_min_age or min_age or 18
+        elif action == "change":
+            final_price = change_price or price
+            final_min_age = change_min_age or min_age or 18
+        else:
+            # No action specified, use general values
+            final_price = price
+            final_min_age = min_age or 18
+            
         return {
-            'price': result[0],
-            'description': result[1],
-            'min_age': result[2] or 18  # Default to 18 if None
+            'price': final_price,
+            'description': description,
+            'min_age': final_min_age
         }
     return None
 

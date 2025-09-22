@@ -92,19 +92,22 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         
         for bank in banks:
-            # Get bank details to show price and age warning
-            bank_details = get_bank_details(bank)
+            # Get bank details to show price directly in button (action-specific)
+            bank_details = get_bank_details(bank, action)
             button_text = bank
             
-            # Add indicators for price and age requirements
+            # Add price and age indicators
             if bank_details:
-                indicators = []
-                if bank_details.get('price'):
-                    indicators.append("💰")
-                if bank_details.get('min_age', 18) > 18:
-                    indicators.append("🔞")
-                if indicators:
-                    button_text += f" {' '.join(indicators)}"
+                price = bank_details.get('price')
+                min_age = bank_details.get('min_age', 18)
+                
+                # Add price directly to button text
+                if price:
+                    button_text += f" - {price}"
+                    
+                # Add age indicator if needed
+                if min_age > 18:
+                    button_text += " 🔞"
             
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"bank_{bank}_{action}")])
         
@@ -115,9 +118,10 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="menu_banks")]]))
             return
             
-        # Add explanation for indicators
-        explanation = "\n\n💰 - є ціна\n🔞 - підвищені вікові вимоги" if any(get_bank_details(bank) and (get_bank_details(bank).get('price') or (get_bank_details(bank).get('min_age', 18) > 18)) for bank in banks) else ""
-        await query.edit_message_text(f"Оберіть банк:{explanation}", reply_markup=InlineKeyboardMarkup(keyboard))
+        # Update explanation text
+        has_age_restrictions = any(get_bank_details(bank, action) and get_bank_details(bank, action).get('min_age', 18) > 18 for bank in banks)
+        explanation = "\n\n🔞 - підвищені вікові вимоги" if has_age_restrictions else ""
+        await query.edit_message_text(f"Оберіть банк (з ціною):{explanation}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     if data.startswith("bank_"):
@@ -129,8 +133,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_id = query.from_user.id
         
-        # Get bank details from database instead of instructions
-        bank_details = get_bank_details(bank)
+        # Get bank details from database with action-specific pricing
+        bank_details = get_bank_details(bank, action)
         age_required = bank_details.get('min_age', 18) if bank_details else 18
         price = bank_details.get('price') if bank_details else None
         
@@ -142,11 +146,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         text = f"Ви обрали банк {bank} ({'Реєстрація' if action == 'register' else 'Перевʼязка'}).\n\n"
         
-        # Show price if available
-        if price:
-            text += f"💰 Ціна: {price}\n"
-        
-        # Show minimum age requirement
+        # Show minimum age requirement only (price was already shown in selection menu)
         text += f"🔞 Мінімальний вік: {age_required} років\n\n"
         
         text += "Підтвердіть, будь ласка, що ви відповідаєте цим вимогам."

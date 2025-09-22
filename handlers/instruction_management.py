@@ -25,7 +25,7 @@ def _iter_banks_basic():
         yield bank_row[:4]
 
 # Conversation states for enhanced instruction management
-INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_STAGE_TYPE_SELECT, INSTR_STAGE_CONFIG, INSTR_TEXT_INPUT = range(10, 15)
+INSTR_BANK_SELECT, INSTR_ACTION_SELECT, INSTR_STAGE_TYPE_SELECT, INSTR_STAGE_CONFIG, INSTR_TEXT_INPUT, INSTR_PHOTO_INPUT = range(10, 16)
 INSTR_EDIT_SELECT, INSTR_EDIT_FIELD, INSTR_REORDER_SELECT = range(15, 18)
 
 async def instructions_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -444,28 +444,148 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
             'instruction_text': text
         }
         stage_display_name = "Запит реквізитів"
-    else:
-        # Default: text+screenshots
-        step_data = {
-            'text': text,
-            'example_images': [],
-            'required_photos': 1
-        }
-        stage_display_name = "Текст + скріни"
+        
+        # Save instruction immediately for requisites
+        success = add_bank_instruction(
+            bank_name=bank_name,
+            action=action,
+            step_number=step,
+            instruction_text=text,
+            step_type=stage_type,
+            step_data=step_data
+        )
+        
+        if success:
+            log_action(0, f"admin_{update.effective_user.id}", "add_stage",
+                      f"{bank_name}:{action}:{step}:{stage_type}")
 
-    # Save instruction with enhanced stage support
+            action_text = "Реєстрації" if action == "register" else "Перев'язки"
+
+            keyboard = [
+                [InlineKeyboardButton("➕ Додати ще етап", callback_data="instr_add_another")],
+                [InlineKeyboardButton("✅ Завершити", callback_data="instructions_menu")]
+            ]
+
+            text_response = f"✅ <b>Етап '{stage_display_name}' створено!</b>\n\n"
+            text_response += f"🏦 Банк: {bank_name}\n"
+            text_response += f"🔄 Тип: {action_text}\n"
+            text_response += f"📋 Етап: {step}\n\n"
+            text_response += "Що далі?"
+
+            await update.message.reply_text(text_response,
+                                          reply_markup=InlineKeyboardMarkup(keyboard),
+                                          parse_mode='HTML')
+        else:
+            await update.message.reply_text("❌ Помилка при збереженні етапу")
+
+        # Clear user data
+        context.user_data.pop('instr_bank', None)
+        context.user_data.pop('instr_action', None)
+        context.user_data.pop('instr_step', None)
+        context.user_data.pop('instr_stage_type', None)
+        context.user_data.pop('instr_stage_subtype', None)
+
+        return ConversationHandler.END
+    else:
+        # For text+screenshots: save text and ask for photos
+        context.user_data['instr_text'] = text
+        
+        action_text = "Реєстрації" if action == "register" else "Перев'язки"
+        
+        keyboard = [
+            [InlineKeyboardButton("Завершити без фото", callback_data="instr_skip_photos")]
+        ]
+        
+        text_response = f"📝 <b>Текст інструкції збережено!</b>\n\n"
+        text_response += f"🏦 Банк: {bank_name}\n"
+        text_response += f"🔄 Тип: {action_text}\n"
+        text_response += f"📋 Етап: {step}\n\n"
+        text_response += "📸 <b>Тепер надішліть приклади скріншотів</b> (по одному).\n"
+        text_response += "Ці зображення будуть показані користувачу як приклади.\n\n"
+        text_response += "Після надсилання всіх фото натисніть кнопку \"Завершити\"."
+        
+        await update.message.reply_text(text_response,
+                                      reply_markup=InlineKeyboardMarkup(keyboard),
+                                      parse_mode='HTML')
+        
+        return INSTR_PHOTO_INPUT
+
+async def instruction_photo_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle instruction photo input for text+screenshots stages"""
+    if not update.message or not update.message.photo:
+        await update.message.reply_text("❌ Будь ласка, надішліть фото або натисніть кнопку 'Завершити без фото'.")
+        return INSTR_PHOTO_INPUT
+
+    # Get largest photo
+    photo = update.message.photo[-1]
+    file_id = photo.file_id
+    
+    # Store photo in user data
+    if 'instr_photos' not in context.user_data:
+        context.user_data['instr_photos'] = []
+    
+    context.user_data['instr_photos'].append(file_id)
+    
+    bank_name = context.user_data.get('instr_bank')
+    action = context.user_data.get('instr_action')
+    step = context.user_data.get('instr_step')
+    photo_count = len(context.user_data['instr_photos'])
+    
+    action_text = "Реєстрації" if action == "register" else "Перев'язки"
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Завершити", callback_data="instr_finish_photos")]
+    ]
+    
+    text_response = f"📸 <b>Фото #{photo_count} додано!</b>\n\n"
+    text_response += f"🏦 Банк: {bank_name}\n"
+    text_response += f"🔄 Тип: {action_text}\n"
+    text_response += f"📋 Етап: {step}\n\n"
+    text_response += f"Зібрано фото: {photo_count}\n\n"
+    text_response += "Надішліть ще фото або натисніть 'Завершити'."
+    
+    await update.message.reply_text(text_response,
+                                  reply_markup=InlineKeyboardMarkup(keyboard),
+                                  parse_mode='HTML')
+    
+    return INSTR_PHOTO_INPUT
+
+async def instruction_skip_photos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle skipping photos or finishing photo input"""
+    query = update.callback_query
+    await query.answer()
+    
+    bank_name = context.user_data.get('instr_bank')
+    action = context.user_data.get('instr_action')
+    step = context.user_data.get('instr_step')
+    text = context.user_data.get('instr_text')
+    photos = context.user_data.get('instr_photos', [])
+    
+    if not all([bank_name, action, step, text]):
+        await query.edit_message_text("❌ Помилка: відсутні дані. Почніть заново.")
+        return ConversationHandler.END
+    
+    # Create step data for text+screenshots
+    step_data = {
+        'text': text,
+        'example_images': photos,
+        'required_photos': 1
+    }
+    
+    # Save instruction with photos
     success = add_bank_instruction(
         bank_name=bank_name,
         action=action,
         step_number=step,
         instruction_text=text,
-        step_type=stage_type,
+        instruction_images=photos,  # Save photos in instruction_images field
+        step_type='text_screenshots',
         step_data=step_data
     )
-
+    
     if success:
         log_action(0, f"admin_{update.effective_user.id}", "add_stage",
-                  f"{bank_name}:{action}:{step}:{stage_type}")
+                  f"{bank_name}:{action}:{step}:text_screenshots")
 
         action_text = "Реєстрації" if action == "register" else "Перев'язки"
 
@@ -474,17 +594,18 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
             [InlineKeyboardButton("✅ Завершити", callback_data="instructions_menu")]
         ]
 
-        text_response = f"✅ <b>Етап '{stage_display_name}' створено!</b>\n\n"
+        text_response = f"✅ <b>Етап 'Текст + скріни' створено!</b>\n\n"
         text_response += f"🏦 Банк: {bank_name}\n"
         text_response += f"🔄 Тип: {action_text}\n"
-        text_response += f"📋 Етап: {step}\n\n"
+        text_response += f"📋 Етап: {step}\n"
+        text_response += f"📸 Фото: {len(photos)}\n\n"
         text_response += "Що далі?"
 
-        await update.message.reply_text(text_response,
-                                      reply_markup=InlineKeyboardMarkup(keyboard),
-                                      parse_mode='HTML')
+        await query.edit_message_text(text_response,
+                                    reply_markup=InlineKeyboardMarkup(keyboard),
+                                    parse_mode='HTML')
     else:
-        await update.message.reply_text("❌ Помилка при збереженні етапу")
+        await query.edit_message_text("❌ Помилка при збереженні етапу")
 
     # Clear user data
     context.user_data.pop('instr_bank', None)
@@ -492,6 +613,8 @@ async def instruction_text_input_handler(update: Update, context: ContextTypes.D
     context.user_data.pop('instr_step', None)
     context.user_data.pop('instr_stage_type', None)
     context.user_data.pop('instr_stage_subtype', None)
+    context.user_data.pop('instr_text', None)
+    context.user_data.pop('instr_photos', None)
 
     return ConversationHandler.END
 
