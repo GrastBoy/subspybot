@@ -324,11 +324,15 @@ def ensure_schema():
     )
     # Migrations for banks table
     _ensure_columns("banks",
-                    ["price", "description", "min_age"],
+                    ["price", "description", "min_age", "register_price", "change_price", "register_min_age", "change_min_age"],
         {
             "price": "ALTER TABLE banks ADD COLUMN price TEXT",
             "description": "ALTER TABLE banks ADD COLUMN description TEXT",
-            "min_age": "ALTER TABLE banks ADD COLUMN min_age INTEGER DEFAULT 18"
+            "min_age": "ALTER TABLE banks ADD COLUMN min_age INTEGER DEFAULT 18",
+            "register_price": "ALTER TABLE banks ADD COLUMN register_price TEXT",
+            "change_price": "ALTER TABLE banks ADD COLUMN change_price TEXT", 
+            "register_min_age": "ALTER TABLE banks ADD COLUMN register_min_age INTEGER DEFAULT 18",
+            "change_min_age": "ALTER TABLE banks ADD COLUMN change_min_age INTEGER DEFAULT 18"
         }
     )
     # Migrations for bank_instructions table to support stage types
@@ -598,18 +602,32 @@ def add_bank_instruction(bank_name: str, action: str, step_number: int,
 
 def get_banks():
     """Get all banks"""
-    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age FROM banks ORDER BY name")
+    cursor.execute("SELECT name, is_active, register_enabled, change_enabled, price, description, min_age, register_price, change_price, register_min_age, change_min_age FROM banks ORDER BY name")
     return cursor.fetchall()
 
-def get_bank_details(bank_name: str):
-    """Get specific bank details (price, description, min_age)"""
-    cursor.execute("SELECT price, description, min_age FROM banks WHERE name=?", (bank_name,))
+def get_bank_details(bank_name: str, action: str = None):
+    """Get specific bank details (price, description, min_age) - optionally action-specific"""
+    cursor.execute("SELECT price, description, min_age, register_price, change_price, register_min_age, change_min_age FROM banks WHERE name=?", (bank_name,))
     result = cursor.fetchone()
     if result:
+        price, description, min_age, register_price, change_price, register_min_age, change_min_age = result
+        
+        # If action is specified, use action-specific values, fall back to general values
+        if action == "register":
+            final_price = register_price or price
+            final_min_age = register_min_age or min_age or 18
+        elif action == "change":
+            final_price = change_price or price
+            final_min_age = change_min_age or min_age or 18
+        else:
+            # No action specified, use general values
+            final_price = price
+            final_min_age = min_age or 18
+            
         return {
-            'price': result[0],
-            'description': result[1],
-            'min_age': result[2] or 18  # Default to 18 if None
+            'price': final_price,
+            'description': description,
+            'min_age': final_min_age
         }
     return None
 

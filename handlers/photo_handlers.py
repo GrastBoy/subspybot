@@ -562,6 +562,15 @@ def get_photos_for_order_stage(order_id: int, stage_db: int):
 
 async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank: str, action: str,
                                 context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # Debug: Check total groups available
+    cursor.execute("SELECT COUNT(*) FROM manager_groups")
+    total_groups = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM manager_groups WHERE busy=0")
+    free_groups_count = cursor.fetchone()[0]
+    
+    logger.info(f"Group assignment attempt: Total groups: {total_groups}, Free groups: {free_groups_count}, Bank: {bank}")
+    
     # First try to find bank-specific groups
     cursor.execute("""
         SELECT id, group_id, name FROM manager_groups
@@ -570,7 +579,7 @@ async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank
         LIMIT 1
     """, (bank, bank))
     free_group = cursor.fetchone()
-
+    
     if free_group:
         group_db_id, group_chat_id, group_name = free_group
         try:
@@ -597,14 +606,20 @@ async def assign_group_or_queue(order_id: int, user_id: int, username: str, bank
     else:
         try:
             enqueue_user(user_id, username, bank, action)
+            logger.info("User %s (order %s) enqueued - no free groups available", user_id, order_id)
+            
+            # More informative message based on the situation
+            if total_groups == 0:
+                message = "⏳ Менеджерські групи ще не налаштовані. Ви в черзі."
+            elif free_groups_count == 0:
+                message = "⏳ Усі менеджери зайняті. Ви в черзі. Отримаєте повідомлення, коли звільниться менеджер."
+            else:
+                message = f"⏳ Немає доступних груп для банку {bank}. Ви в черзі."
+                
             try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="⏳ Усі менеджери зайняті. Ви в черзі. Отримаєте повідомлення, коли звільниться менеджер."
-                )
+                await context.bot.send_message(chat_id=user_id, text=message)
             except Exception:
                 logger.warning("Не вдалося повідомити користувача в черзі (ID=%s)", user_id)
-            logger.info("User %s (order %s) enqueued", user_id, order_id)
         except Exception as e:
             logger.exception("assign_group_or_queue error while enqueue: %s", e)
         return False
@@ -671,10 +686,14 @@ async def send_instruction(user_id: int, context, order_id: int = None):
             "age_required": find_age_requirement(bank, action)
         }
 
-    steps = INSTRUCTIONS.get(bank, {}).get(action, [])
+    # Load instructions from database instead of old instructions.py
+    from db import get_bank_instructions
+    import json
+    
+    instructions = get_bank_instructions(bank, action)
     
     # Check if instructions are empty and handle gracefully
-    if not steps and stage0 == 0:
+    if not instructions and stage0 == 0:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
@@ -684,16 +703,16 @@ async def send_instruction(user_id: int, context, order_id: int = None):
             pass
         return
 
-    # Stage2 тригер: як тільки ми закінчили перший крок (stage0 >= 1), але Stage2 ще не завершено
+    # Stage2 trigger: as soon as we finished first step (stage0 >= 1), but Stage2 not yet complete
     if stage0 >= 1 and not stage2_complete:
         from handlers.stage2_handlers import _send_stage2_ui
         await _send_stage2_ui(user_id, order_id, context)
         return
 
-    # Завершення тільки якщо:
-    #  - усі кроки пройдено (stage0 >= len(steps))
-    #  - Stage2 або не потрібний (stage0 <1) або вже завершений (stage2_complete == True)
-    if stage0 >= len(steps) and (stage0 < 1 or stage2_complete):
+    # Completion only if:
+    #  - all steps passed (stage0 >= len(instructions))
+    #  - Stage2 either not required (stage0 <1) or already complete (stage2_complete == True)
+    if stage0 >= len(instructions) and (stage0 < 1 or stage2_complete):
         cursor.execute("UPDATE orders SET status='Завершено' WHERE id=?", (order_id,))
         conn.commit()
         if group_id:
@@ -718,26 +737,42 @@ async def send_instruction(user_id: int, context, order_id: int = None):
         user_states.pop(user_id, None)
         return
 
-    # Звичайний рендер кроку інструкцій
-    if stage0 < len(steps):
-        step = steps[stage0]
-        text = step.get("text", "") if isinstance(step, dict) else str(step)
-        images = step.get("images", []) if isinstance(step, dict) else []
+    # Render instruction step
+    if stage0 < len(instructions):
+        # Get instruction data: (step_number, instruction_text, instruction_images, age_requirement, required_photos, step_type, step_data, step_order)
+        instruction_data = instructions[stage0]
+        step_number, instruction_text, instruction_images_json, age_requirement, required_photos, step_type, step_data_json, step_order = instruction_data
+        
+        # Parse JSON fields
+        try:
+            instruction_images = json.loads(instruction_images_json) if instruction_images_json else []
+        except:
+            instruction_images = []
+        
+        try:
+            step_data = json.loads(step_data_json) if step_data_json else {}
+        except:
+            step_data = {}
+        
+        # Update order status
         cursor.execute("UPDATE orders SET status=? WHERE id=?", (f"На етапі {stage0 + 1}", order_id))
         conn.commit()
 
-        if text:
+        # Send instruction text
+        if instruction_text:
             try:
-                await context.bot.send_message(chat_id=user_id, text=text)
+                await context.bot.send_message(chat_id=user_id, text=instruction_text)
             except Exception as e:
                 logger.warning("Не вдалося відправити текст інструкції: %s", e)
 
-        for img in images:
+        # Send example images from admin
+        for img in instruction_images:
             try:
                 if isinstance(img, str) and os.path.exists(img):
                     with open(img, "rb") as f:
                         await context.bot.send_photo(chat_id=user_id, photo=f)
                 else:
+                    # img is file_id from telegram
                     await context.bot.send_photo(chat_id=user_id, photo=img)
             except Exception as e:
                 logger.warning("Не вдалося відправити зображення %s: %s", img, e)
