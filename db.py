@@ -515,19 +515,29 @@ def create_order_form(order_id: int, form_data: dict):
     except Exception as e:
         logger.warning("create_order_form failed: %s", e)
 
-def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, price: str = None, description: str = None, min_age: int = 18) -> bool:
-    """Add a new bank"""
+def add_bank(name: str, register_enabled: bool = True, change_enabled: bool = True, 
+             price: str = None, description: str = None, min_age: int = 18,
+             register_price: str = None, change_price: str = None,
+             register_min_age: int = None, change_min_age: int = None) -> bool:
+    """Add a new bank with optional action-specific pricing"""
     try:
-        cursor.execute("INSERT INTO banks (name, register_enabled, change_enabled, price, description, min_age) VALUES (?,?,?,?,?,?)",
-                      (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description, min_age))
+        cursor.execute("""
+            INSERT INTO banks (name, register_enabled, change_enabled, price, description, min_age, 
+                             register_price, change_price, register_min_age, change_min_age) 
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (name, 1 if register_enabled else 0, 1 if change_enabled else 0, price, description, min_age,
+              register_price, change_price, register_min_age, change_min_age))
         conn.commit()
         return True
     except Exception as e:
         logger.warning("add_bank failed: %s", e)
         return False
 
-def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, is_active: bool = None, price: str = None, description: str = None, min_age: int = None) -> bool:
-    """Update bank settings"""
+def update_bank(name: str, register_enabled: bool = None, change_enabled: bool = None, 
+                is_active: bool = None, price: str = None, description: str = None, 
+                min_age: int = None, register_price: str = None, change_price: str = None,
+                register_min_age: int = None, change_min_age: int = None) -> bool:
+    """Update bank settings with optional action-specific pricing"""
     try:
         updates = []
         params = []
@@ -549,6 +559,18 @@ def update_bank(name: str, register_enabled: bool = None, change_enabled: bool =
         if min_age is not None:
             updates.append("min_age=?")
             params.append(min_age)
+        if register_price is not None:
+            updates.append("register_price=?")
+            params.append(register_price)
+        if change_price is not None:
+            updates.append("change_price=?")
+            params.append(change_price)
+        if register_min_age is not None:
+            updates.append("register_min_age=?")
+            params.append(register_min_age)
+        if change_min_age is not None:
+            updates.append("change_min_age=?")
+            params.append(change_min_age)
 
         if updates:
             params.append(name)
