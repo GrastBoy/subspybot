@@ -74,7 +74,7 @@ async def list_banks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text = "📋 <b>Список банків</b>\n\n❌ Немає зареєстрованих банків"
     else:
         text = "📋 <b>Список банків</b>\n\n"
-        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age, _, _, _, _ in banks:
             status = "✅ Активний" if is_active else "❌ Неактивний"
             register_status = "✅" if register_enabled else "❌"
             change_status = "✅" if change_enabled else "❌"
@@ -391,7 +391,7 @@ async def edit_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "✏️ <b>Редагувати банк</b>\n\nОберіть банк для редагування:"
         keyboard = []
-        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age, _, _, _, _ in banks:
             status = "✅" if is_active else "❌"
             keyboard.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"edit_bank_{name}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")])
@@ -414,7 +414,7 @@ async def delete_bank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         text = "🗑️ <b>Видалити банк</b>\n\n⚠️ <b>Увага!</b> Видалення банку призведе до видалення всіх його інструкцій.\n\nОберіть банк для видалення:"
         keyboard = []
-        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age, _, _, _, _ in banks:
             keyboard.append([InlineKeyboardButton(f"🗑️ {name}", callback_data=f"delete_bank_{name}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="banks_menu")])
 
@@ -434,7 +434,7 @@ async def edit_bank_settings_handler(update: Update, context: ContextTypes.DEFAU
     # Get current bank settings
     banks = get_banks()
     bank_data = None
-    for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
+    for name, is_active, register_enabled, change_enabled, price, description, min_age, _, _, _, _ in banks:
         if name == bank_name:
             bank_data = (is_active, register_enabled, change_enabled, price, description, min_age)
             break
@@ -874,7 +874,7 @@ async def form_templates_list_handler(update: Update, context: ContextTypes.DEFA
     if not banks:
         text += "❌ Немає зареєстрованих банків"
     else:
-        for name, is_active, register_enabled, change_enabled, price, description, min_age in banks:
+        for name, is_active, register_enabled, change_enabled, price, description, min_age, _, _, _, _ in banks:
             template = get_bank_form_template(name)
             if template:
                 field_count = len(template.get('fields', []))
