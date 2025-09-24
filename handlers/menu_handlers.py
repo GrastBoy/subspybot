@@ -14,7 +14,7 @@ def _banks_from_instructions(action: str):
     banks = get_banks()
     result = []
     
-    for bank_name, is_active, register_enabled, change_enabled, _, _, _ in banks:
+    for bank_name, is_active, register_enabled, change_enabled, _, _, _, _, _, _, _ in banks:
         if not is_active:
             continue
             

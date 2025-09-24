@@ -113,7 +113,7 @@ async def bank_name_input_handler(update: Update, context: ContextTypes.DEFAULT_
         return BANK_NAME_INPUT
 
     # Check if bank already exists
-    existing_banks = [name for name, _, _, _, _, _, _ in get_banks()]
+    existing_banks = [name for name, _, _, _, _, _, _, _, _, _, _ in get_banks()]
     if bank_name in existing_banks:
         await update.message.reply_text(f"❌ Банк '{bank_name}' вже існує. Введіть іншу назву:")
         return BANK_NAME_INPUT
@@ -485,7 +485,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_active = None
-        for name, is_active, _, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _, _, _, _, _ in banks:
             if name == bank_name:
                 current_active = is_active
                 break
@@ -504,7 +504,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_register = None
-        for name, _, register_enabled, _, _, _, _ in banks:
+        for name, _, register_enabled, _, _, _, _, _, _, _, _ in banks:
             if name == bank_name:
                 current_register = register_enabled
                 break
@@ -523,7 +523,7 @@ async def toggle_bank_setting_handler(update: Update, context: ContextTypes.DEFA
         # Get current status
         banks = get_banks()
         current_change = None
-        for name, _, _, change_enabled, _, _, _ in banks:
+        for name, _, _, change_enabled, _, _, _, _, _, _, _ in banks:
             if name == bank_name:
                 current_change = change_enabled
                 break
@@ -655,11 +655,11 @@ async def add_bank_group_handler(update: Update, context: ContextTypes.DEFAULT_T
     else:
         text = "➕ <b>Додати групу для банку</b>\n\nОберіть банк для якого додати групу:"
         keyboard = []
-        for name, is_active, _, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _, _, _, _, _ in banks:
             if is_active:  # Only show active banks
                 keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"select_bank_for_group_{name}")])
         
-        if not any(is_active for _, is_active, _, _, _, _, _ in banks):
+        if not any(is_active for _, is_active, _, _, _, _, _, _, _, _, _ in banks):
             text = "➕ <b>Додати групу для банку</b>\n\n❌ Немає активних банків.\nСпочатку активуйте хоча б один банк."
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="groups_menu")])
@@ -906,7 +906,7 @@ async def form_templates_create_handler(update: Update, context: ContextTypes.DE
     else:
         text = "➕ <b>Створити шаблон анкети</b>\n\nОберіть банк для якого створити шаблон:"
         keyboard = []
-        for name, is_active, _, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _, _, _, _, _ in banks:
             keyboard.append([InlineKeyboardButton(f"🏦 {name}", callback_data=f"create_template_{name}")])
         
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="form_templates_menu")])
@@ -931,7 +931,7 @@ async def form_templates_edit_handler(update: Update, context: ContextTypes.DEFA
         keyboard = []
         has_templates = False
         
-        for name, is_active, _, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _, _, _, _, _ in banks:
             template = get_bank_form_template(name)
             if template:
                 has_templates = True
@@ -963,7 +963,7 @@ async def form_templates_delete_handler(update: Update, context: ContextTypes.DE
         keyboard = []
         has_templates = False
         
-        for name, is_active, _, _, _, _, _ in banks:
+        for name, is_active, _, _, _, _, _, _, _, _, _ in banks:
             template = get_bank_form_template(name)
             if template:
                 has_templates = True

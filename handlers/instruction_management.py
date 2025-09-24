@@ -20,7 +20,7 @@ def _iter_banks_basic():
     """Helper to yield (name, is_active, register_enabled, change_enabled) from get_banks()"""
     banks = get_banks()
     for bank_row in banks:
-        # get_banks() returns (name, is_active, register_enabled, change_enabled, price, description, min_age)
+        # get_banks() returns (name, is_active, register_enabled, change_enabled, price, description, min_age, register_price, change_price, register_min_age, change_min_age)
         # We only need the first 4 columns
         yield bank_row[:4]
 
